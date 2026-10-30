@@ -1,19 +1,33 @@
-## Structure
+# ORACLE-SWE
 
-src dir : codes to extract information source. src/pipeline is the complete extraction pipeline.
+This is the source code of the paper [ORACLE-SWE](https://arxiv.org/abs/2604.07789).
 
-fork dir: SWE-agent; SWE-bench-Live (compatible to eval old swebench); SWE-bench-Pro
+## Repository Structure
 
-## Environment
+```
+|_./README.md
+|_./pyproject.toml
+|
+|_src dir: codes to extract the five ORACLE information singals
+|   |_src/pipeline is the complete extraction pipeline
+|
+|_fork dir
+    |_SWE-agent-run-GT: rollout the agent with extracted signals
+    |_SWE-agent-get-factor: get agent-extracted factors
+    |_SWE-bench-Live: evaluate SWE-bench and SWE-bench-Live patches
+    |_SWE-bench-Pro: evaluate SWE-bench-Pro patches
+```
 
-### for src dir
+## Environment Setup
 
-just pip install . at the root dir
+### For src dir
 
-### for each forked proj
+Just `pip install . ` at the root dir.
 
-create a separate venv for each proj. 
+### For each forked project
 
-follow their original installation guides. 
+Create a separate venv for each forked project. 
 
-remember that the swerex lib in SWE-agent needs to be replaced by our modified version venv/lib/python3.12/site-packages/swerex.
+Follow the README in each forked sub-directory to install the dependencies. 
+
+Remember that the swerex library in the venv of SWE-agent needs to be replaced by our modified version venv/lib/python3.12/site-packages/swerex.
