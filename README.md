@@ -13,7 +13,7 @@ This is the source code of the paper [ORACLE-SWE](https://arxiv.org/abs/2604.077
 |
 |_fork dir
     |_SWE-agent-run-GT: rollout the agent with extracted signals
-    |_SWE-agent-get-factor: get agent-extracted factors
+    |_SWE-agent-get-factor: get the five agent-extracted factors
     |_SWE-bench-Live: evaluate SWE-bench and SWE-bench-Live patches
     |_SWE-bench-Pro: evaluate SWE-bench-Pro patches
 ```
