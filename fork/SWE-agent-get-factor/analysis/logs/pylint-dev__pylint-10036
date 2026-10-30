@@ -1,0 +1,171 @@
+python reproduction.py
+test_module_name_source_root_is_child_of_cwd (__main__.TestDiscoverPackagePath)
+discover_package_path must return the source root when the source ... FAIL
+test_module_name_with_absolute_source_root (__main__.TestDiscoverPackagePath)
+discover_package_path must return the source root when a bare module ... FAIL
+test_module_name_with_relative_source_root (__main__.TestDiscoverPackagePath)
+discover_package_path must return the source root when a bare module ... FAIL
+test_module_name_with_source_root_no_src_init (__main__.TestDiscoverPackagePath)
+discover_package_path should still return the source root even when ... FAIL
+test_augmented_sys_path_includes_source_root (__main__.TestPyreverseRunWithSourceRoot)
+sys.path inside the augmented_sys_path context must include the ... FAIL
+test_run_with_absolute_source_root (__main__.TestPyreverseRunWithSourceRoot)
+pyreverse Run.run() must NOT raise ImportError when an absolute ... FAIL
+test_run_with_relative_source_root (__main__.TestPyreverseRunWithSourceRoot)
+pyreverse Run.run() must NOT raise ImportError when the module is ... FAIL
+test_file_path_with_matching_source_root (__main__.TestDiscoverPackagePathRegression)
+When a module is given as a file path that is inside the source root, ... ok
+test_file_path_without_source_roots_still_works (__main__.TestDiscoverPackagePathRegression)
+When a module is given as a file path and no source roots are ... ok
+
+======================================================================
+FAIL: test_module_name_source_root_is_child_of_cwd (__main__.TestDiscoverPackagePath)
+discover_package_path must return the source root when the source
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 179, in test_module_name_source_root_is_child_of_cwd
+    self.assertEqual(
+AssertionError: '/tmp/pyreverse_repro__hp_xob1' != '/tmp/pyreverse_repro__hp_xob1/src'
+- /tmp/pyreverse_repro__hp_xob1
++ /tmp/pyreverse_repro__hp_xob1/src
+?                              ++++
+ : discover_package_path('mymodule', ['./src']) returned '/tmp/pyreverse_repro__hp_xob1' but expected '/tmp/pyreverse_repro__hp_xob1/src'. The source root (child of cwd) was not returned for a bare module name.
+
+======================================================================
+FAIL: test_module_name_with_absolute_source_root (__main__.TestDiscoverPackagePath)
+discover_package_path must return the source root when a bare module
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 121, in test_module_name_with_absolute_source_root
+    self.assertEqual(
+AssertionError: '/tmp/pyreverse_repro_gnfby6y0' != '/tmp/pyreverse_repro_gnfby6y0/src'
+- /tmp/pyreverse_repro_gnfby6y0
++ /tmp/pyreverse_repro_gnfby6y0/src
+?                              ++++
+ : discover_package_path('mymodule', ['/tmp/pyreverse_repro_gnfby6y0/src']) returned '/tmp/pyreverse_repro_gnfby6y0' but expected '/tmp/pyreverse_repro_gnfby6y0/src'.
+
+======================================================================
+FAIL: test_module_name_with_relative_source_root (__main__.TestDiscoverPackagePath)
+discover_package_path must return the source root when a bare module
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 95, in test_module_name_with_relative_source_root
+    self.assertEqual(
+AssertionError: '/tmp/pyreverse_repro_i95u10_5' != '/tmp/pyreverse_repro_i95u10_5/src'
+- /tmp/pyreverse_repro_i95u10_5
++ /tmp/pyreverse_repro_i95u10_5/src
+?                              ++++
+ : discover_package_path('mymodule', ['./src']) returned '/tmp/pyreverse_repro_i95u10_5' but expected the source root '/tmp/pyreverse_repro_i95u10_5/src'. This means source-roots are not being used when the module is passed by name rather than by file path.
+
+======================================================================
+FAIL: test_module_name_with_source_root_no_src_init (__main__.TestDiscoverPackagePath)
+discover_package_path should still return the source root even when
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 144, in test_module_name_with_source_root_no_src_init
+    self.assertEqual(
+AssertionError: '/tmp/pyreverse_repro_1j533e0_' != '/tmp/pyreverse_repro_1j533e0_/src'
+- /tmp/pyreverse_repro_1j533e0_
++ /tmp/pyreverse_repro_1j533e0_/src
+?                              ++++
+ : discover_package_path('mymodule', ['./src']) returned '/tmp/pyreverse_repro_1j533e0_' but expected '/tmp/pyreverse_repro_1j533e0_/src' (no src/__init__.py case).
+
+======================================================================
+FAIL: test_augmented_sys_path_includes_source_root (__main__.TestPyreverseRunWithSourceRoot)
+sys.path inside the augmented_sys_path context must include the
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 334, in test_augmented_sys_path_includes_source_root
+    self.assertIn(
+AssertionError: '/tmp/pyreverse_e2e_bl0unh4u/src' not found in ['/tmp/pyreverse_e2e_bl0unh4u', '/testbed', '/usr/local/lib/python39.zip', '/usr/local/lib/python3.9', '/usr/local/lib/python3.9/lib-dynload', '/usr/local/lib/python3.9/site-packages', '/testbed'] : sys.path during execution ['/tmp/pyreverse_e2e_bl0unh4u', '/testbed', '/usr/local/lib/python39.zip', '/usr/local/lib/python3.9', '/usr/local/lib/python3.9/lib-dynload', '/usr/local/lib/python3.9/site-packages', '/testbed'] does not contain the source root '/tmp/pyreverse_e2e_bl0unh4u/src'. discover_package_path did not return the source root for a bare module name, so the source root was never added to sys.path.
+
+======================================================================
+FAIL: test_run_with_absolute_source_root (__main__.TestPyreverseRunWithSourceRoot)
+pyreverse Run.run() must NOT raise ImportError when an absolute
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 293, in test_run_with_absolute_source_root
+    Run(["-o", "html", "--source-roots", abs_src, "mymodule"])
+  File "/testbed/pylint/pyreverse/main.py", line 297, in __init__
+    sys.exit(self.run(args))
+  File "/testbed/pylint/pyreverse/main.py", line 308, in run
+    project = project_from_files(
+  File "/usr/local/lib/python3.9/unittest/mock.py", line 1092, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "/usr/local/lib/python3.9/unittest/mock.py", line 1096, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "/usr/local/lib/python3.9/unittest/mock.py", line 1157, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/testbed/reproduction.py", line 285, in _wrapper
+    return original(files, *a, **kw)
+  File "/testbed/pylint/pyreverse/inspector.py", line 361, in project_from_files
+    fpath = astroid.modutils.file_from_modpath(something.split("."))
+  File "/usr/local/lib/python3.9/site-packages/astroid/modutils.py", line 325, in file_from_modpath
+    return file_info_from_modpath(modpath, path, context_file).location
+  File "/usr/local/lib/python3.9/site-packages/astroid/modutils.py", line 376, in file_info_from_modpath
+    return _spec_from_modpath(modpath, path, context)
+  File "/usr/local/lib/python3.9/site-packages/astroid/modutils.py", line 631, in _spec_from_modpath
+    found_spec = spec.find_spec(modpath, path)
+  File "/usr/local/lib/python3.9/site-packages/astroid/interpreter/_import/spec.py", line 445, in find_spec
+    return _find_spec(tuple(modpath), tuple(path) if path else None)
+  File "/usr/local/lib/python3.9/site-packages/astroid/interpreter/_import/spec.py", line 461, in _find_spec
+    finder, spec = _find_spec_with_path(
+  File "/usr/local/lib/python3.9/site-packages/astroid/interpreter/_import/spec.py", line 425, in _find_spec_with_path
+    raise ImportError(f"No module named {'.'.join(module_parts)}")
+ImportError: No module named mymodule
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 301, in test_run_with_absolute_source_root
+    self.fail(
+AssertionError: pyreverse raised ImportError: No module named mymodule
+Absolute source root was not added to sys.path.
+
+======================================================================
+FAIL: test_run_with_relative_source_root (__main__.TestPyreverseRunWithSourceRoot)
+pyreverse Run.run() must NOT raise ImportError when the module is
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 249, in test_run_with_relative_source_root
+    Run(["-o", "html", "--source-roots", "./src", "mymodule"])
+  File "/testbed/pylint/pyreverse/main.py", line 297, in __init__
+    sys.exit(self.run(args))
+  File "/testbed/pylint/pyreverse/main.py", line 308, in run
+    project = project_from_files(
+  File "/usr/local/lib/python3.9/unittest/mock.py", line 1092, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "/usr/local/lib/python3.9/unittest/mock.py", line 1096, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "/usr/local/lib/python3.9/unittest/mock.py", line 1157, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/testbed/reproduction.py", line 241, in _wrapper
+    return original(files, *a, **kw)
+  File "/testbed/pylint/pyreverse/inspector.py", line 361, in project_from_files
+    fpath = astroid.modutils.file_from_modpath(something.split("."))
+  File "/usr/local/lib/python3.9/site-packages/astroid/modutils.py", line 325, in file_from_modpath
+    return file_info_from_modpath(modpath, path, context_file).location
+  File "/usr/local/lib/python3.9/site-packages/astroid/modutils.py", line 376, in file_info_from_modpath
+    return _spec_from_modpath(modpath, path, context)
+  File "/usr/local/lib/python3.9/site-packages/astroid/modutils.py", line 631, in _spec_from_modpath
+    found_spec = spec.find_spec(modpath, path)
+  File "/usr/local/lib/python3.9/site-packages/astroid/interpreter/_import/spec.py", line 445, in find_spec
+    return _find_spec(tuple(modpath), tuple(path) if path else None)
+  File "/usr/local/lib/python3.9/site-packages/astroid/interpreter/_import/spec.py", line 461, in _find_spec
+    finder, spec = _find_spec_with_path(
+  File "/usr/local/lib/python3.9/site-packages/astroid/interpreter/_import/spec.py", line 425, in _find_spec_with_path
+    raise ImportError(f"No module named {'.'.join(module_parts)}")
+ImportError: No module named mymodule
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 258, in test_run_with_relative_source_root
+    self.fail(
+AssertionError: pyreverse raised ImportError: No module named mymodule
+Source root was not added to sys.path.
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.518s
+
+FAILED (failures=7)

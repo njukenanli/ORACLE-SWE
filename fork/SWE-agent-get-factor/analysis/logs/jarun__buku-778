@@ -1,0 +1,36 @@
+python reproduction.py
+======================================================================
+Running filter index assignment reproduction tests
+======================================================================
+
+PASS test_correct_pos_order_preserved
+PASS test_type_change_wrong_index_causes_reordering (order: ['url', 'title', 'tags'])
+PASS test_type_change_correct_index_retains_order (order: ['tags', 'url', 'title'])
+PASS test_new_filter_inflated_index_causes_wrong_order (order: ['url', 'title', 'tags'])
+PASS test_new_filter_position_based_index (order: ['tags', 'url', 'title'])
+PASS test_filter_groups_data_structure
+PASS test_pos_string_sort_ordering (order: ['url', 'tags', 'title'])
+PASS test_active_filters_order_matches_pos
+  Case A (correct): ['tags', 'url', 'title']
+  Case B (bug - type change): ['url', 'title', 'tags']
+  Case C (fixed): ['tags', 'url', 'title']
+PASS test_filter_value_preserved_across_type_change
+PASS test_single_filter_pos_irrelevant
+PASS test_two_filters_swapped_pos_swaps_order
+  Normal order: ['tags', 'url']
+  Swapped pos order: ['url', 'tags']
+
+======================================================================
+Results: 11 passed, 0 failed
+
+All tests passed.
+
+IMPORTANT: Some tests verify the BUGGY behavior (demonstrating the issue).
+After the fix is applied:
+  - test_type_change_wrong_index_causes_reordering should FAIL
+    (because the bug will no longer be present)
+  - All other tests should continue to PASS
+
+The fix is in filters.js:
+  1. changeOperation: retain old input's name (index) instead of calling makeName
+  2. addFilter (new): use row count (position) for index, not lastCount

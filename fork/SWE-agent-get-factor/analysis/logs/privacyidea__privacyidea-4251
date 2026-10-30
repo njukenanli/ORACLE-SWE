@@ -1,0 +1,65 @@
+python reproduction.py
+The configuration name is: testing
+Additional configuration will be read from the file 
+Using PI_LOGLEVEL and PI_LOGFILE.
+Using PI_LOGLEVEL 20.
+Using PI_LOGFILE privacyidea.log.
+test_01_non_existing_script_directory_raises_config_admin_error (__main__.ScriptEventHandlerErrorCheckingTestCase)
+When the configured script directory does not exist on the filesystem, ... ERROR
+test_02_file_path_instead_of_directory_raises_os_or_config_error (__main__.ScriptEventHandlerErrorCheckingTestCase)
+When the configured script directory path points to a file (not a ... ok
+test_03_default_non_existing_path_raises_config_admin_error (__main__.ScriptEventHandlerErrorCheckingTestCase)
+When the PI_SCRIPT_HANDLER_DIRECTORY config key is absent, the handler ... ERROR
+test_04_valid_script_directory_returns_actions_dict (__main__.ScriptEventHandlerErrorCheckingTestCase)
+When the configured script directory exists and is a valid directory, ... ok
+test_05_empty_script_directory_returns_empty_actions_dict (__main__.ScriptEventHandlerErrorCheckingTestCase)
+When the configured script directory exists but is empty, accessing ... ok
+test_06_non_existing_path_error_is_not_file_not_found_error (__main__.ScriptEventHandlerErrorCheckingTestCase)
+Specifically verify that the raw FileNotFoundError (which would be ... FAIL
+test_07_file_path_raises_some_error_not_silent_success (__main__.ScriptEventHandlerErrorCheckingTestCase)
+Verify that when the script path points to a file instead of a ... ok
+
+======================================================================
+ERROR: test_01_non_existing_script_directory_raises_config_admin_error (__main__.ScriptEventHandlerErrorCheckingTestCase)
+When the configured script directory does not exist on the filesystem,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 62, in test_01_non_existing_script_directory_raises_config_admin_error
+    _actions = handler.actions
+  File "/testbed/privacyidea/lib/eventhandler/scripthandler.py", line 87, in actions
+    scripts = os.listdir(cls.script_directory)
+FileNotFoundError: [Errno 2] No such file or directory: '/non/existent/path/to/scripts'
+
+======================================================================
+ERROR: test_03_default_non_existing_path_raises_config_admin_error (__main__.ScriptEventHandlerErrorCheckingTestCase)
+When the PI_SCRIPT_HANDLER_DIRECTORY config key is absent, the handler
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 106, in test_03_default_non_existing_path_raises_config_admin_error
+    _actions = handler.actions
+  File "/testbed/privacyidea/lib/eventhandler/scripthandler.py", line 87, in actions
+    scripts = os.listdir(cls.script_directory)
+FileNotFoundError: [Errno 2] No such file or directory: '/etc/privacyidea/scripts'
+
+======================================================================
+FAIL: test_06_non_existing_path_error_is_not_file_not_found_error (__main__.ScriptEventHandlerErrorCheckingTestCase)
+Specifically verify that the raw FileNotFoundError (which would be
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 160, in test_06_non_existing_path_error_is_not_file_not_found_error
+    _actions = handler.actions
+  File "/testbed/privacyidea/lib/eventhandler/scripthandler.py", line 87, in actions
+    scripts = os.listdir(cls.script_directory)
+FileNotFoundError: [Errno 2] No such file or directory: '/does/not/exist/anywhere'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 167, in test_06_non_existing_path_error_is_not_file_not_found_error
+    self.fail(
+AssertionError: Got raw FileNotFoundError instead of ConfigAdminError: [Errno 2] No such file or directory: '/does/not/exist/anywhere'. This is the bug: a broken script path causes an unhandled OS exception which results in a 500 error.
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.337s
+
+FAILED (failures=1, errors=2)

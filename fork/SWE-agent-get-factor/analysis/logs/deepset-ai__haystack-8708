@@ -1,0 +1,26 @@
+python reproduction.py
+Running PDFMinerToDocument reproduction tests...
+======================================================================
+2026-07-11T10:08:19.637520Z [warning  ] PDFMinerToDocument could not extract text from the file /testbed/test/test_files/pdf/non_text_searchable.pdf. Returning an empty document. lineno=168 module=haystack.components.converters.pdfminer source=PosixPath('/testbed/test/test_files/pdf/non_text_searchable.pdf')
+FAIL: test_empty_document_id_differs_from_document_with_no_meta
+  AssertionError: Document IDs should differ because produced_doc has meta={'file_path': 'non_text_searchable.pdf'}, but both have id=d4675c57fcfe114db0b95f1da46eea3c5d6f5729c17d01fb5251ae19830a3455. This indicates the bug: meta is set AFTER Document initialization, so the ID is computed without the metadata.
+2026-07-11T10:08:19.640392Z [warning  ] PDFMinerToDocument could not extract text from the file ByteStream(data=b'%PDF-1.4\n%\xc7\xec\x8f\xa2\n5 0 obj\n<</Length 6 0 R/Filter /FlateDecode>>\nstream\nx\x9c+T0\xd030S0\x00A\x18#9\x97K?\xc8\\!\xbd\x98\xabP\xc1\xd2\xc0\xc0\x08,h...', meta={'file_path': '/path/to/file1.pdf'}, mime_type=None). Returning an empty document. lineno=168 module=haystack.components.converters.pdfminer source=ByteStream(data=b'%PDF-1.4\n%\xc7\xec\x8f\xa2\n5 0 obj\n<</Length 6 0 R/Filter /FlateDecode>>\nstream\nx\x9c+T0\xd030S0\x00A\x18#9\x97K?\xc8\\!\xbd\x98\xabP\xc1\xd2\xc0\xc0\x08,h...', meta={'file_path': '/path/to/file1.pdf'}, mime_type=None)
+2026-07-11T10:08:19.642815Z [warning  ] PDFMinerToDocument could not extract text from the file ByteStream(data=b'%PDF-1.4\n%\xc7\xec\x8f\xa2\n5 0 obj\n<</Length 6 0 R/Filter /FlateDecode>>\nstream\nx\x9c+T0\xd030S0\x00A\x18#9\x97K?\xc8\\!\xbd\x98\xabP\xc1\xd2\xc0\xc0\x08,h...', meta={'file_path': '/path/to/file2.pdf'}, mime_type=None). Returning an empty document. lineno=168 module=haystack.components.converters.pdfminer source=ByteStream(data=b'%PDF-1.4\n%\xc7\xec\x8f\xa2\n5 0 obj\n<</Length 6 0 R/Filter /FlateDecode>>\nstream\nx\x9c+T0\xd030S0\x00A\x18#9\x97K?\xc8\\!\xbd\x98\xabP\xc1\xd2\xc0\xc0\x08,h...', meta={'file_path': '/path/to/file2.pdf'}, mime_type=None)
+FAIL: test_documents_with_same_content_different_meta_have_different_ids
+  AssertionError: Documents with same content but different meta should have different IDs. doc1.meta={'file_path': 'file1.pdf'}, doc2.meta={'file_path': 'file2.pdf'}, but both have id=d4675c57fcfe114db0b95f1da46eea3c5d6f5729c17d01fb5251ae19830a3455. This is the duplicate detection bug: these two documents would be treated as duplicates when written to a DocumentStore.
+FAIL: test_document_with_content_and_meta_id_matches_expected
+  AssertionError: produced_doc.id=bafeacdf2aa2e90500789a22fd89e3b4ac02725f7e30a1fc23e37d90a23416e2 should equal expected_doc.id=7edd1c50db9ea1cf444409c79cf440055fbcc97253534fadca2cca98cbb17338. This means meta was NOT passed at Document initialization, causing wrong IDs.
+FAIL: test_meta_from_bytestream_used_in_id
+  AssertionError: produced_doc.id=dd158dfcfc6ea82a09c2d24ad86cc88644e2438fc2b8731b12c93ca1b0996b4a != expected_doc.id=af82c43d2c695433c7a148a44a835f3e467f8d440b4032d437db292ddb6dfe97. Meta from ByteStream was not included in ID computation.
+FAIL: test_meta_from_run_parameter_used_in_id
+  AssertionError: produced_doc.id=bafeacdf2aa2e90500789a22fd89e3b4ac02725f7e30a1fc23e37d90a23416e2 != expected_doc.id=7b88d45e140b00983cc212312e43408cfef29fdc62b8995e45a8559975ddf51b. User-supplied meta was not included in ID computation.
+FAIL: test_store_full_path_true_vs_false_produces_different_ids
+  AssertionError: Documents with store_full_path=True vs False should have different IDs because their file_path metadata differs. doc_full.meta['file_path']=/testbed/test/test_files/pdf/sample_pdf_1.pdf, doc_basename.meta['file_path']=sample_pdf_1.pdf, but both have id=bafeacdf2aa2e90500789a22fd89e3b4ac02725f7e30a1fc23e37d90a23416e2.
+======================================================================
+FAILED: 6/6 tests failed:
+  - test_empty_document_id_differs_from_document_with_no_meta
+  - test_documents_with_same_content_different_meta_have_different_ids
+  - test_document_with_content_and_meta_id_matches_expected
+  - test_meta_from_bytestream_used_in_id
+  - test_meta_from_run_parameter_used_in_id
+  - test_store_full_path_true_vs_false_produces_different_ids

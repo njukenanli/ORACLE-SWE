@@ -1,0 +1,28 @@
+python reproduction.py
+Running reproduction tests for TypedPredictor List[str] optimization bug...
+(Tests 2, 4, 6 FAIL before fix; all should PASS after fix)
+
+  PASSED  Test 1: Inference works for List[str] output (should always pass)
+  FAILED  Test 2: Demo format must be JSON, not numbered list (FAILS before fix)
+          AssertionError: Demo assistant message still uses numbered list format (old bug present).
+Expected JSON in demo, got:
+[[ ## tokens ## ]]
+[1] «EU»
+[2] «rejects»
+[3] «German»
+[4] «call»
+
+[[ ## completed ## ]]
+  PASSED  Test 3: Numbered-list format causes JSONDecodeError (always fails/passes consistently)
+  0% 0/2 [00:00<?, ?it/s]100% 2/2 [00:00<00:00, 434.22it/s]
+Bootstrapped 2 full traces after 2 examples in round 0.
+  FAILED  Test 4: BootstrapFewShot demo messages use numbered list format (FAILS before fix)
+          AssertionError: Found numbered-list format '[1]' in demo assistant messages during BootstrapFewShot.
+After the fix, List[str] demo outputs should be JSON, not numbered lists.
+This is the root cause of the optimization failure with real LLMs.
+  PASSED  Test 5: LabeledFewShot + inference still works after compile
+  FAILED  Test 6: List[int] demo format must also be JSON (FAILS before fix)
+          TypeError: argument of type 'int' is not iterable
+  PASSED  Test 7: format_fields root-cause behaviour (documents the bug)
+
+Results: 4 passed, 3 failed out of 7 tests

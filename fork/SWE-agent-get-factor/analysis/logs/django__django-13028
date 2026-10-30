@@ -1,0 +1,47 @@
+python reproduction.py
+test_error_message_currently_raised_by_bug (__main__.FilterableRHSReproTests) ... FAIL
+test_filter_rhs_instance_in_lookup_works_even_with_filterable_false (__main__.FilterableRHSReproTests) ... ok
+test_filter_rhs_instance_on_model_without_filterable_attribute_name (__main__.FilterableRHSReproTests) ... ok
+test_filter_rhs_instance_with_filterable_false_should_work (__main__.FilterableRHSReproTests) ... FAIL
+test_filter_rhs_instance_with_filterable_true (__main__.FilterableRHSReproTests)
+Control: when 'filterable' attribute on the instance is True, the query works. ... ok
+test_filter_rhs_pk_value_works_even_with_filterable_false (__main__.FilterableRHSReproTests) ... ok
+
+======================================================================
+FAIL: test_error_message_currently_raised_by_bug (__main__.FilterableRHSReproTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 159, in test_error_message_currently_raised_by_bug
+    list(ProductMetaData.objects.filter(metadata_type=self.brand_metadata_false))
+django.db.utils.NotSupportedError: ProductMetaDataType is disallowed in the filter clause.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "reproduction.py", line 163, in test_error_message_currently_raised_by_bug
+    f"Bug reproduced: Unexpected NotSupportedError was raised: {e}.\n"
+AssertionError: Bug reproduced: Unexpected NotSupportedError was raised: ProductMetaDataType is disallowed in the filter clause..
+Expected no error when filtering with a FK instance regardless of any 
+attribute named 'filterable' on the instance.
+
+======================================================================
+FAIL: test_filter_rhs_instance_with_filterable_false_should_work (__main__.FilterableRHSReproTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 105, in test_filter_rhs_instance_with_filterable_false_should_work
+    qs = ProductMetaData.objects.filter(value='Dark Vador', metadata_type=self.brand_metadata_false)
+django.db.utils.NotSupportedError: ProductMetaDataType is disallowed in the filter clause.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "reproduction.py", line 112, in test_filter_rhs_instance_with_filterable_false_should_work
+    f"Bug reproduced: Unexpected NotSupportedError was raised: {e}.\n"
+AssertionError: Bug reproduced: Unexpected NotSupportedError was raised: ProductMetaDataType is disallowed in the filter clause..
+Expected no error when filtering with a FK instance regardless of any 
+attribute named 'filterable' on the instance.
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.022s
+
+FAILED (failures=2)

@@ -1,0 +1,64 @@
+python reproduction.py
+.F.F.F..F                                                                [100%]
+=================================== FAILURES ===================================
+_________________ test_handler_level_is_default_after_root_set _________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f2615db7a60>
+
+    def test_handler_level_is_default_after_root_set(caplog):
+        # This should be restored to NOTSET by the fixture finalizer
+>       assert caplog.handler.level == logging.NOTSET
+E       assert 42 == 0
+E        +  where 42 = <LogCaptureHandler (Level 42)>.level
+E        +    where <LogCaptureHandler (Level 42)> = <_pytest.logging.LogCaptureFixture object at 0x7f2615db7a60>.handler
+E        +  and   0 = logging.NOTSET
+
+test_caplog_restoration.py:15: AssertionError
+____________________ test_named_logger_and_handler_restored ____________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f2615ddb610>
+
+    def test_named_logger_and_handler_restored(caplog):
+        # Named logger should be restored to its original level (usually NOTSET)
+        assert logging.getLogger("foo").level == logging.NOTSET
+        # Critically, handler level should also be restored to NOTSET
+>       assert caplog.handler.level == logging.NOTSET
+E       assert 40 == 0
+E        +  where 40 = <LogCaptureHandler (ERROR)>.level
+E        +    where <LogCaptureHandler (ERROR)> = <_pytest.logging.LogCaptureFixture object at 0x7f2615ddb610>.handler
+E        +  and   0 = logging.NOTSET
+
+test_caplog_restoration.py:25: AssertionError
+_________________ test_handler_level_restored_after_exception __________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f2616133b50>
+
+    def test_handler_level_restored_after_exception(caplog):
+        # Even after a previous test which raised (but handled) an exception,
+        # handler level should be restored
+>       assert caplog.handler.level == logging.NOTSET
+E       assert 50 == 0
+E        +  where 50 = <LogCaptureHandler (CRITICAL)>.level
+E        +    where <LogCaptureHandler (CRITICAL)> = <_pytest.logging.LogCaptureFixture object at 0x7f2616133b50>.handler
+E        +  and   0 = logging.NOTSET
+
+test_caplog_restoration.py:38: AssertionError
+_______________ test_handler_level_restored_after_multiple_sets ________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f2615f1e040>
+
+    def test_handler_level_restored_after_multiple_sets(caplog):
+        # Final check that handler level is restored after multiple set_level calls
+>       assert caplog.handler.level == logging.NOTSET
+E       assert 30 == 0
+E        +  where 30 = <LogCaptureHandler (WARNING)>.level
+E        +    where <LogCaptureHandler (WARNING)> = <_pytest.logging.LogCaptureFixture object at 0x7f2615f1e040>.handler
+E        +  and   0 = logging.NOTSET
+
+test_caplog_restoration.py:54: AssertionError
+=========================== short test summary info ============================
+FAILED test_caplog_restoration.py::test_handler_level_is_default_after_root_set
+FAILED test_caplog_restoration.py::test_named_logger_and_handler_restored - a...
+FAILED test_caplog_restoration.py::test_handler_level_restored_after_exception
+FAILED test_caplog_restoration.py::test_handler_level_restored_after_multiple_sets
+4 failed, 5 passed in 0.04s

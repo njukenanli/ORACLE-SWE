@@ -1,0 +1,36 @@
+python reproduction.py
+test_foreach_findInMap_account_id_no_e3019 (__main__.TestE3019FalsePositiveForeachPseudoParam)
+Main bug reproduction from the issue report. ... FAIL
+test_foreach_findInMap_account_id_three_accounts_no_e3019 (__main__.TestE3019FalsePositiveForeachPseudoParam)
+Same pattern as the main bug, but with three accounts in the mapping. ... FAIL
+test_foreach_no_account_id_no_e3019 (__main__.TestE3019FalsePositiveForeachPseudoParam)
+ForEach loops whose FindInMap uses a static (non-pseudo) top-level key. ... ok
+test_truly_duplicate_identifiers_still_flagged (__main__.TestE3019FalsePositiveForeachPseudoParam)
+Two resources with a statically identical RoleName must still ... ok
+
+======================================================================
+FAIL: test_foreach_findInMap_account_id_no_e3019 (__main__.TestE3019FalsePositiveForeachPseudoParam)
+Main bug reproduction from the issue report.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 282, in test_foreach_findInMap_account_id_no_e3019
+    self.assertEqual(
+AssertionError: 0 != 2 : E3019 false positive: cfn-lint incorrectly reports 2 duplicate-identifier error(s) for resources whose RoleNames are determined at runtime via FindInMap + AWS::AccountId.
+Matches: Primary identifiers {'RoleName': {'Fn::Sub': ['${appname}', {'appname': 'appa-qa'}]}} should have unique values across the resources {'ARole', 'BRole'}
+Primary identifiers {'RoleName': {'Fn::Sub': ['${appname}', {'appname': 'appa-qa'}]}} should have unique values across the resources {'ARole', 'BRole'}
+
+======================================================================
+FAIL: test_foreach_findInMap_account_id_three_accounts_no_e3019 (__main__.TestE3019FalsePositiveForeachPseudoParam)
+Same pattern as the main bug, but with three accounts in the mapping.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 309, in test_foreach_findInMap_account_id_three_accounts_no_e3019
+    self.assertEqual(
+AssertionError: 0 != 2 : E3019 false positive with 3-account mapping: 2 unexpected error(s).
+Matches: Primary identifiers {'RoleName': {'Fn::Sub': ['${appname}', {'appname': 'appa-account3'}]}} should have unique values across the resources {'ARole', 'BRole'}
+Primary identifiers {'RoleName': {'Fn::Sub': ['${appname}', {'appname': 'appa-account3'}]}} should have unique values across the resources {'ARole', 'BRole'}
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.708s
+
+FAILED (failures=2)

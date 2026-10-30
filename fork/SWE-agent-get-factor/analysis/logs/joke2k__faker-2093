@@ -1,0 +1,108 @@
+python reproduction.py
+============================================================
+PR Description Reproduction:
+============================================================
+  fake.name_female() => 'Аліна Забарний'
+  BUG CONFIRMED: Got 'Забарний' (male form), expected 'Забарна' (female form)
+
+============================================================
+Running unittest suite:
+============================================================
+test_exact_issue_reproduction (__main__.TestUkUaIssueReproduction)
+Reproduces the exact example from the PR description. ... FAIL
+test_female_adjective_surnames_in_last_names_female (__main__.TestUkUaIssueReproduction)
+Every expected female form of an adjective surname must be present ... skipped 'last_names_female not yet defined; fix not applied.'
+test_female_adjective_surnames_not_in_last_names_male (__main__.TestUkUaIssueReproduction)
+Female adjective forms of surnames must not appear in last_names_male. ... skipped 'last_names_male not yet defined; fix not applied.'
+test_formats_female_uses_last_name_female (__main__.TestUkUaIssueReproduction)
+Every format string in formats_female must use {{last_name_female}} ... FAIL
+test_formats_male_uses_last_name_male (__main__.TestUkUaIssueReproduction)
+Every format string in formats_male must use {{last_name_male}} ... FAIL
+test_full_name_female_no_male_adjective_surname (__main__.TestUkUaIssueReproduction)
+full_name(gender='F') must not produce a name with a male adjective ... FAIL
+test_full_name_male_no_female_adjective_surname (__main__.TestUkUaIssueReproduction)
+full_name(gender='M') must not produce a name with a female adjective ... ok
+test_last_name_female_returns_female_adjective_forms (__main__.TestUkUaIssueReproduction)
+After many calls to last_name_female(), each expected female adjective ... skipped 'last_names_female not yet defined; fix not applied.'
+test_last_name_female_returns_no_male_adjective_surnames (__main__.TestUkUaIssueReproduction)
+Calling last_name_female() many times must never return a surname ... FAIL
+test_last_name_male_returns_no_female_adjective_surnames (__main__.TestUkUaIssueReproduction)
+Calling last_name_male() many times must never return a surname ... ok
+test_male_adjective_surnames_not_in_last_names_female (__main__.TestUkUaIssueReproduction)
+Male adjective forms of surnames must not appear in last_names_female. ... skipped 'last_names_female not yet defined; fix not applied.'
+test_name_female_no_male_adjective_surname (__main__.TestUkUaIssueReproduction)
+name_female() must never produce a full name containing a male ... FAIL
+test_name_male_no_female_adjective_surname (__main__.TestUkUaIssueReproduction)
+name_male() must never produce a full name containing a female ... ok
+test_non_adjective_surnames_in_both_gendered_lists (__main__.TestUkUaIssueReproduction)
+Non-adjective surnames like Бабій, Палій, etc. must appear in ... skipped 'Gendered last_names not yet defined; fix not applied.'
+test_provider_has_gendered_last_names (__main__.TestUkUaIssueReproduction)
+After the fix, the provider must define both last_names_female ... FAIL
+
+======================================================================
+FAIL: test_exact_issue_reproduction (__main__.TestUkUaIssueReproduction)
+Reproduces the exact example from the PR description.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 115, in test_exact_issue_reproduction
+    self.assertNotIn(
+AssertionError: 'Забарний' unexpectedly found in 'Аліна Забарний' : name_female() returned 'Аліна Забарний' which contains the male adjective surname 'Забарний'. Expected female form 'Забарна'.
+
+======================================================================
+FAIL: test_formats_female_uses_last_name_female (__main__.TestUkUaIssueReproduction)
+Every format string in formats_female must use {{last_name_female}}
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 342, in test_formats_female_uses_last_name_female
+    self.assertNotIn(
+AssertionError: '{{last_name}}' unexpectedly found in '{{first_name_female}} {{last_name}}' : formats_female entry '{{first_name_female}} {{last_name}}' still uses '{{last_name}}' instead of '{{last_name_female}}'.
+
+======================================================================
+FAIL: test_formats_male_uses_last_name_male (__main__.TestUkUaIssueReproduction)
+Every format string in formats_male must use {{last_name_male}}
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 363, in test_formats_male_uses_last_name_male
+    self.assertNotIn(
+AssertionError: '{{last_name}}' unexpectedly found in '{{first_name_male}} {{last_name}}' : formats_male entry '{{first_name_male}} {{last_name}}' still uses '{{last_name}}' instead of '{{last_name_male}}'.
+
+======================================================================
+FAIL: test_full_name_female_no_male_adjective_surname (__main__.TestUkUaIssueReproduction)
+full_name(gender='F') must not produce a name with a male adjective
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 306, in test_full_name_female_no_male_adjective_surname
+    self.assertNotIn(
+AssertionError: 'Воблий' unexpectedly found in 'Воблий Юстина Глібівна' : full_name(gender='F') returned 'Воблий Юстина Глібівна' which contains the male adjective surname 'Воблий'.
+
+======================================================================
+FAIL: test_last_name_female_returns_no_male_adjective_surnames (__main__.TestUkUaIssueReproduction)
+Calling last_name_female() many times must never return a surname
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 134, in test_last_name_female_returns_no_male_adjective_surnames
+    self.assertNotIn(
+AssertionError: 'Вишиваний' unexpectedly found in {'Абрагамовський', 'Піддубний', 'Вишиваний', 'Гоголь-Яновський', 'Зарудний', 'Деряжний', 'Базилевський', 'Гайворонський', 'Тихий', 'Воблий', 'Гаєвський', 'Непорожній', 'Чалий', 'Ґжицький', 'Забарний'} : last_name_female() returned male adjective surname 'Вишиваний'
+
+======================================================================
+FAIL: test_name_female_no_male_adjective_surname (__main__.TestUkUaIssueReproduction)
+name_female() must never produce a full name containing a male
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 171, in test_name_female_no_male_adjective_surname
+    self.assertNotIn(
+AssertionError: 'Вишиваний' unexpectedly found in 'Анжела ишиваний' : name_female() returned 'Анжела Вишиваний' which contains the male adjective surname 'Вишиваний'.
+
+======================================================================
+FAIL: test_provider_has_gendered_last_names (__main__.TestUkUaIssueReproduction)
+After the fix, the provider must define both last_names_female
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 206, in test_provider_has_gendered_last_names
+    self.assertTrue(
+AssertionError: False is not true : UkUAProvider must have a 'last_names_female' attribute after the fix.
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.371s
+
+FAILED (failures=7, skipped=5)

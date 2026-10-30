@@ -1,0 +1,67 @@
+python reproduction.py
+======================================================================
+Reproduction tests for: 'Adding suptitle in compressed layout causes
+weird spacing'
+======================================================================
+
+Running: test_compressed_suptitle_spacing_with_gridspec_kw
+  (Core bug: original example from issue report (with gridspec_kw))
+  suptitle y0=0.9778, y1=0.9958
+  ax0 y1 (top)=0.7576
+  gap (suptitle_bottom - ax0_top)=0.2203  [should be small, ~h_pad=0.04]
+  ax1 y0 (bottom)=0.2629
+  gap_at_bottom=0.2629  [should be large]
+  FAILED: Gap between suptitle bottom (0.9778) and ax0 top (0.7576) is 0.2203, which is too large. The suptitle should be close to the axes (gap ~ h_pad=0.04167). This is the bug: excess compressed whitespace is incorrectly inserted between the suptitle and the axes.
+
+Running: test_compressed_suptitle_spacing_without_gridspec_kw
+  (Bug also occurs without gridspec_kw)
+  suptitle y0=0.9778, y1=0.9958
+  ax0 y1 (top)=0.6932
+  gap (suptitle_bottom - ax0_top)=0.2846  [should be small, ~h_pad=0.04]
+  ax1 y0 (bottom)=0.2673
+  gap_at_bottom=0.2673  [should be large]
+  FAILED: Gap between suptitle bottom (0.9778) and ax0 top (0.6932) is 0.2846, which is too large. The suptitle should be close to the axes (gap ~ h_pad=0.04167).
+
+Running: test_compressed_no_suptitle_unchanged
+  (Without suptitle, compressed layout should still have whitespace at both ends)
+  ax0 top y=0.7543
+  ax1 bottom y=0.2695
+  gap_at_top=0.2457
+  gap_at_bottom=0.2695
+  total_whitespace=0.5152
+  PASSED
+
+Running: test_compressed_suptitle_top_margin_not_oversized
+  (Top margin should not be oversized when suptitle is present)
+  suptitle bottom: 0.9778
+  ax0 top: 0.7576
+  gap: 0.2203
+  FAILED: Gap between suptitle (0.9778) and ax0 top (0.7576) is 0.2203, which is more than 3 * h_pad (0.1250). The compress layout should not insert extra whitespace between the suptitle and the axes.
+
+Running: test_compressed_suptitle_vs_no_suptitle_axes_layout
+  (Compare axes layout with and without suptitle)
+  Without suptitle:
+    top gap: 0.2457
+    bottom gap: 0.2695
+  With suptitle:
+    suptitle top: 0.9958, suptitle bottom: 0.9778
+    gap suptitle to ax0: 0.2203  [should be small, ~h_pad]
+    bottom gap: 0.2629  [should be larger than without suptitle]
+  FAILED: Gap between suptitle and ax0 top is 0.2203, which is too large. Expected small gap (< 0.05, ~h_pad=0.04167).
+
+Running: test_compressed_suptitle_multiple_rows
+  (Three-row layout with suptitle)
+  suptitle y0=0.9852
+  top axis y1=0.8715
+  gap suptitle to axes: 0.1137  [should be small, ~h_pad]
+  bottom axis y0=0.1413
+  gap at bottom: 0.1413  [should be large]
+  FAILED: Gap between suptitle and top axes is 0.1137, which is too large. Expected < 0.05 (~ h_pad=0.04).
+
+======================================================================
+FAILED: 5/6 tests failed:
+  - test_compressed_suptitle_spacing_with_gridspec_kw
+  - test_compressed_suptitle_spacing_without_gridspec_kw
+  - test_compressed_suptitle_top_margin_not_oversized
+  - test_compressed_suptitle_vs_no_suptitle_axes_layout
+  - test_compressed_suptitle_multiple_rows

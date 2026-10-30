@@ -1,0 +1,44 @@
+python reproduction.py
+test_mysql_datetime_cast_date_converts_from_db_tz_to_current_tz (__main__.TimezoneAwareSQLGenerationTests) ... FAIL
+test_mysql_datetime_cast_date_skips_convert_when_tz_equal (__main__.TimezoneAwareSQLGenerationTests) ... FAIL
+test_date_lookup_with_different_tz_should_convert_from_db_tz (__main__.SQLiteDateLookupTests) ... FAIL
+test_date_lookup_with_same_tz_should_match (__main__.SQLiteDateLookupTests) ... ok
+test_equality_without_date_lookup_matches (__main__.SQLiteDateLookupTests) ... ok
+
+======================================================================
+FAIL: test_mysql_datetime_cast_date_converts_from_db_tz_to_current_tz (__main__.TimezoneAwareSQLGenerationTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 89, in test_mysql_datetime_cast_date_converts_from_db_tz_to_current_tz
+    'Expected: %r\nGot:      %r\n(Note: Got likely contains from-UTC conversion, which is incorrect.)' % (expected, sql)
+AssertionError: "DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'UTC', 'UTC'))" != "DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'Europe/Paris', 'UTC'))"
+- DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'UTC', 'UTC'))
+?                                                ^^^
++ DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'Europe/Paris', 'UTC'))
+?                                                ^^^^^^^^^^^^
+ : MySQL datetime_cast_date_sql should convert from DB TIME_ZONE to current tz.
+Expected: "DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'Europe/Paris', 'UTC'))"
+Got:      "DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'UTC', 'UTC'))"
+(Note: Got likely contains from-UTC conversion, which is incorrect.)
+
+======================================================================
+FAIL: test_mysql_datetime_cast_date_skips_convert_when_tz_equal (__main__.TimezoneAwareSQLGenerationTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 108, in test_mysql_datetime_cast_date_skips_convert_when_tz_equal
+    'Got SQL: %r' % sql
+AssertionError: 'CONVERT_TZ' unexpectedly found in "DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'UTC', 'Europe/Paris'))" : MySQL should not use CONVERT_TZ when DB TIME_ZONE equals current tz.
+Got SQL: "DATE(CONVERT_TZ(my_table`.`my_datetime_field, 'UTC', 'Europe/Paris'))"
+
+======================================================================
+FAIL: test_date_lookup_with_different_tz_should_convert_from_db_tz (__main__.SQLiteDateLookupTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "reproduction.py", line 172, in test_date_lookup_with_different_tz_should_convert_from_db_tz
+    'Date lookup should convert from DB TIME_ZONE to current tz before truncation.'
+AssertionError: False is not true : Date lookup should convert from DB TIME_ZONE to current tz before truncation.
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.092s
+
+FAILED (failures=3)

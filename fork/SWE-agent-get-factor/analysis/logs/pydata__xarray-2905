@@ -1,0 +1,64 @@
+python reproduction.py
+Reproduction for: Variable.__setitem__ coercing types on objects with a values property
+Python: 3.10.15 | packaged by conda-forge | (main, Sep 30 2024, 17:51:04) [GCC 13.3.0]
+xarray version: 0.16.3.dev122+g7c4e2ac83
+
+Running test_non_broadcast_single_element_without_values_attr ... ok
+Running test_non_broadcast_single_element_with_values_attr_via_loc_default_dim ... FAIL
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 154, in main
+    test()
+  File "/testbed/reproduction.py", line 88, in test_non_broadcast_single_element_with_values_attr_via_loc_default_dim
+    assert_is_instance_in_object_array(da, 0, HasValuesAttr)
+  File "/testbed/reproduction.py", line 57, in assert_is_instance_in_object_array
+    assert isinstance(elem, cls), (
+AssertionError: Expected element at index 0 to be instance of HasValuesAttr, but got type <class 'int'> with value 5
+Running test_non_broadcast_single_element_with_values_attr_via_positional_index ... FAIL
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 154, in main
+    test()
+  File "/testbed/reproduction.py", line 96, in test_non_broadcast_single_element_with_values_attr_via_positional_index
+    assert_is_instance_in_object_array(da, 0, HasValuesAttr)
+  File "/testbed/reproduction.py", line 57, in assert_is_instance_in_object_array
+    assert isinstance(elem, cls), (
+AssertionError: Expected element at index 0 to be instance of HasValuesAttr, but got type <class 'int'> with value 5
+Running test_non_broadcast_single_element_with_values_property ... FAIL
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 154, in main
+    test()
+  File "/testbed/reproduction.py", line 104, in test_non_broadcast_single_element_with_values_property
+    assert_is_instance_in_object_array(da, 0, HasValuesProperty)
+  File "/testbed/reproduction.py", line 57, in assert_is_instance_in_object_array
+    assert isinstance(elem, cls), (
+AssertionError: Expected element at index 0 to be instance of HasValuesProperty, but got type <class 'int'> with value 11
+Running test_non_broadcast_single_element_with_values_array_property ... ERROR
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 154, in main
+    test()
+  File "/testbed/reproduction.py", line 110, in test_non_broadcast_single_element_with_values_array_property
+    da.loc[{da.dims[0]: 0}] = obj
+  File "/testbed/xarray/core/dataarray.py", line 213, in __setitem__
+    self.data_array[pos_indexers] = value
+  File "/testbed/xarray/core/dataarray.py", line 724, in __setitem__
+    self.variable[key] = value
+  File "/testbed/xarray/core/variable.py", line 860, in __setitem__
+    raise ValueError(
+ValueError: shape mismatch: value array of shape (2,) could not be broadcast to indexing result with 0 dimensions
+Running test_broadcast_assignment_scalar_object_with_values_attr ... FAIL
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 154, in main
+    test()
+  File "/testbed/reproduction.py", line 121, in test_broadcast_assignment_scalar_object_with_values_attr
+    assert_all_instances_in_object_array(da, HasValuesAttr)
+  File "/testbed/reproduction.py", line 66, in assert_all_instances_in_object_array
+    assert isinstance(elem, cls), (
+AssertionError: Expected all elements to be instances of HasValuesAttr, but element 0 has type <class 'int'> and value 5
+Running test_direct_variable_setitem_with_values_attr ... FAIL
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 154, in main
+    test()
+  File "/testbed/reproduction.py", line 131, in test_direct_variable_setitem_with_values_attr
+    assert isinstance(a[0], HasValuesAttr), (
+AssertionError: Expected Variable to store HasValuesAttr, got <class 'int'>: 5
+
+Reproduction complete: 6 test(s) failed as expected if the bug is present.

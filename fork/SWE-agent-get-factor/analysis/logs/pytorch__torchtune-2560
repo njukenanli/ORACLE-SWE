@@ -1,0 +1,176 @@
+python reproduction.py
+======================================================================
+Reproduction test for: Chunked output causes timeout crash on
+certain seq len (github.com/pytorch/torchtune/issues/2554)
+======================================================================
+
+=== Test 1: TransformerDecoder.chunked_output ===
+FAIL: chunked_output with seq_len=7: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+FAIL: chunked_output with seq_len=14: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+FAIL: chunked_output with seq_len=21: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+FAIL: chunked_output with seq_len=28: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+FAIL: chunked_output with seq_len=35: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+FAIL: chunked_output with seq_len=42: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+FAIL: chunked_output with seq_len=49: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+
+=== Test 2: chunked_output with seq_len < num_output_chunks ===
+FAIL: chunked_output with seq_len=1 < num_chunks=8: expected 8 chunks, got 1
+      Expected: 8, Got: 1
+FAIL: chunked_output with seq_len=2 < num_chunks=8: expected 8 chunks, got 2
+      Expected: 8, Got: 2
+FAIL: chunked_output with seq_len=3 < num_chunks=8: expected 8 chunks, got 3
+      Expected: 8, Got: 3
+FAIL: chunked_output with seq_len=4 < num_chunks=8: expected 8 chunks, got 4
+      Expected: 8, Got: 4
+FAIL: chunked_output with seq_len=5 < num_chunks=8: expected 8 chunks, got 5
+      Expected: 8, Got: 5
+FAIL: chunked_output with seq_len=6 < num_chunks=8: expected 8 chunks, got 6
+      Expected: 8, Got: 6
+FAIL: chunked_output with seq_len=7 < num_chunks=8: expected 8 chunks, got 7
+      Expected: 8, Got: 7
+
+=== Test 3: chunked_output total tokens preserved ===
+
+=== Test 4: Core bug - chunk() returns wrong count ===
+  seq_len=7: BUG confirmed - chunk gives 7 chunks instead of 8
+  seq_len=14: BUG confirmed - chunk gives 7 chunks instead of 8
+  seq_len=21: BUG confirmed - chunk gives 7 chunks instead of 8
+  seq_len=28: BUG confirmed - chunk gives 7 chunks instead of 8
+  seq_len=35: BUG confirmed - chunk gives 7 chunks instead of 8
+  seq_len=42: BUG confirmed - chunk gives 7 chunks instead of 8
+  seq_len=49: BUG confirmed - chunk gives 7 chunks instead of 8
+
+=== Test 5: Main bug - chunked_output count must match num_output_chunks ===
+FAIL: seq_len=7: chunked_output returned 7 chunks but model.num_output_chunks=8
+      Expected: 8, Got: 7
+FAIL: seq_len=14: chunked_output returned 7 chunks but model.num_output_chunks=8
+      Expected: 8, Got: 7
+FAIL: seq_len=21: chunked_output returned 7 chunks but model.num_output_chunks=8
+      Expected: 8, Got: 7
+FAIL: seq_len=28: chunked_output returned 7 chunks but model.num_output_chunks=8
+      Expected: 8, Got: 7
+FAIL: seq_len=35: chunked_output returned 7 chunks but model.num_output_chunks=8
+      Expected: 8, Got: 7
+FAIL: seq_len=42: chunked_output returned 7 chunks but model.num_output_chunks=8
+      Expected: 8, Got: 7
+FAIL: seq_len=49: chunked_output returned 7 chunks but model.num_output_chunks=8
+      Expected: 8, Got: 7
+
+=== Test 6: CEWithChunkedOutputLoss labels split count ===
+  seq_len=7: BUG - labels.chunk() gives 7 chunks, not 8
+  seq_len=14: BUG - labels.chunk() gives 7 chunks, not 8
+  seq_len=21: BUG - labels.chunk() gives 7 chunks, not 8
+  seq_len=28: BUG - labels.chunk() gives 7 chunks, not 8
+  seq_len=35: BUG - labels.chunk() gives 7 chunks, not 8
+  seq_len=42: BUG - labels.chunk() gives 7 chunks, not 8
+  seq_len=49: BUG - labels.chunk() gives 7 chunks, not 8
+
+=== Test 7: CEWithChunkedOutputLoss works with all seq lengths ===
+FAIL: CE loss raised exception for seq_len=14: Expected input batch_size (2) to match target batch_size (4).
+FAIL: CE loss raised exception for seq_len=21: Expected input batch_size (4) to match target batch_size (6).
+FAIL: CE loss raised exception for seq_len=28: Expected input batch_size (6) to match target batch_size (8).
+FAIL: CE loss raised exception for seq_len=35: Expected input batch_size (8) to match target batch_size (10).
+FAIL: CE loss raised exception for seq_len=42: Expected input batch_size (10) to match target batch_size (12).
+FAIL: CE loss raised exception for seq_len=49: Expected input batch_size (12) to match target batch_size (14).
+FAIL: CE loss raised exception for seq_len=50: Expected input batch_size (12) to match target batch_size (14).
+
+=== Test 8: ForwardKLWithChunkedOutputLoss labels split count ===
+  seq_len=7: BUG - ForwardKL labels.chunk() gives 7 chunks, not 8
+  seq_len=14: BUG - ForwardKL labels.chunk() gives 7 chunks, not 8
+  seq_len=21: BUG - ForwardKL labels.chunk() gives 7 chunks, not 8
+  seq_len=28: BUG - ForwardKL labels.chunk() gives 7 chunks, not 8
+  seq_len=35: BUG - ForwardKL labels.chunk() gives 7 chunks, not 8
+  seq_len=42: BUG - ForwardKL labels.chunk() gives 7 chunks, not 8
+  seq_len=49: BUG - ForwardKL labels.chunk() gives 7 chunks, not 8
+
+=== Test 9: ForwardKLWithChunkedOutputLoss works with all seq lengths ===
+FAIL: FKL loss raised exception for seq_len=14: The size of tensor a (2) must match the size of tensor b (4) at non-singleton dimension 0
+FAIL: FKL loss raised exception for seq_len=21: The size of tensor a (4) must match the size of tensor b (6) at non-singleton dimension 0
+FAIL: FKL loss raised exception for seq_len=28: The size of tensor a (6) must match the size of tensor b (8) at non-singleton dimension 0
+FAIL: FKL loss raised exception for seq_len=35: The size of tensor a (8) must match the size of tensor b (10) at non-singleton dimension 0
+FAIL: FKL loss raised exception for seq_len=42: The size of tensor a (10) must match the size of tensor b (12) at non-singleton dimension 0
+FAIL: FKL loss raised exception for seq_len=49: The size of tensor a (12) must match the size of tensor b (14) at non-singleton dimension 0
+FAIL: FKL loss raised exception for seq_len=50: The size of tensor a (12) must match the size of tensor b (14) at non-singleton dimension 0
+
+=== Test 10: ReverseKLWithChunkedOutputLoss labels split count ===
+  seq_len=7: BUG - ReverseKL labels.chunk() gives 7 chunks, not 8
+  seq_len=14: BUG - ReverseKL labels.chunk() gives 7 chunks, not 8
+  seq_len=21: BUG - ReverseKL labels.chunk() gives 7 chunks, not 8
+  seq_len=28: BUG - ReverseKL labels.chunk() gives 7 chunks, not 8
+  seq_len=35: BUG - ReverseKL labels.chunk() gives 7 chunks, not 8
+  seq_len=42: BUG - ReverseKL labels.chunk() gives 7 chunks, not 8
+  seq_len=49: BUG - ReverseKL labels.chunk() gives 7 chunks, not 8
+
+=== Test 11: ReverseKLWithChunkedOutputLoss works with all seq lengths ===
+FAIL: RKL loss raised exception for seq_len=14: The size of tensor a (2) must match the size of tensor b (4) at non-singleton dimension 0
+FAIL: RKL loss raised exception for seq_len=21: The size of tensor a (4) must match the size of tensor b (6) at non-singleton dimension 0
+FAIL: RKL loss raised exception for seq_len=28: The size of tensor a (6) must match the size of tensor b (8) at non-singleton dimension 0
+FAIL: RKL loss raised exception for seq_len=35: The size of tensor a (8) must match the size of tensor b (10) at non-singleton dimension 0
+FAIL: RKL loss raised exception for seq_len=42: The size of tensor a (10) must match the size of tensor b (12) at non-singleton dimension 0
+FAIL: RKL loss raised exception for seq_len=49: The size of tensor a (12) must match the size of tensor b (14) at non-singleton dimension 0
+FAIL: RKL loss raised exception for seq_len=50: The size of tensor a (12) must match the size of tensor b (14) at non-singleton dimension 0
+
+=== Test 12: SymmetricKLWithChunkedOutputLoss labels split count ===
+  seq_len=7: BUG - SymKL labels.chunk() gives 7 chunks, not 8
+  seq_len=14: BUG - SymKL labels.chunk() gives 7 chunks, not 8
+  seq_len=21: BUG - SymKL labels.chunk() gives 7 chunks, not 8
+  seq_len=28: BUG - SymKL labels.chunk() gives 7 chunks, not 8
+  seq_len=35: BUG - SymKL labels.chunk() gives 7 chunks, not 8
+  seq_len=42: BUG - SymKL labels.chunk() gives 7 chunks, not 8
+  seq_len=49: BUG - SymKL labels.chunk() gives 7 chunks, not 8
+
+=== Test 13: SymmetricKLWithChunkedOutputLoss works with all seq lengths ===
+FAIL: SymKL loss raised exception for seq_len=14: The size of tensor a (2) must match the size of tensor b (4) at non-singleton dimension 0
+FAIL: SymKL loss raised exception for seq_len=21: The size of tensor a (4) must match the size of tensor b (6) at non-singleton dimension 0
+FAIL: SymKL loss raised exception for seq_len=28: The size of tensor a (6) must match the size of tensor b (8) at non-singleton dimension 0
+FAIL: SymKL loss raised exception for seq_len=35: The size of tensor a (8) must match the size of tensor b (10) at non-singleton dimension 0
+FAIL: SymKL loss raised exception for seq_len=42: The size of tensor a (10) must match the size of tensor b (12) at non-singleton dimension 0
+FAIL: SymKL loss raised exception for seq_len=49: The size of tensor a (12) must match the size of tensor b (14) at non-singleton dimension 0
+FAIL: SymKL loss raised exception for seq_len=50: The size of tensor a (12) must match the size of tensor b (14) at non-singleton dimension 0
+
+=== Test 14: chunked_output count for all known broken lengths ===
+  FAIL: seq_len=1 -> 1 chunks (expected 8)
+  FAIL: seq_len=2 -> 2 chunks (expected 8)
+  FAIL: seq_len=3 -> 3 chunks (expected 8)
+  FAIL: seq_len=4 -> 4 chunks (expected 8)
+  FAIL: seq_len=5 -> 5 chunks (expected 8)
+  FAIL: seq_len=6 -> 6 chunks (expected 8)
+  FAIL: seq_len=7 -> 7 chunks (expected 8)
+  FAIL: seq_len=9 -> 5 chunks (expected 8)
+  FAIL: seq_len=10 -> 5 chunks (expected 8)
+  FAIL: seq_len=11 -> 6 chunks (expected 8)
+  FAIL: seq_len=12 -> 6 chunks (expected 8)
+  FAIL: seq_len=13 -> 7 chunks (expected 8)
+  FAIL: seq_len=14 -> 7 chunks (expected 8)
+  FAIL: seq_len=17 -> 6 chunks (expected 8)
+  FAIL: seq_len=18 -> 6 chunks (expected 8)
+  FAIL: seq_len=19 -> 7 chunks (expected 8)
+  FAIL: seq_len=20 -> 7 chunks (expected 8)
+  FAIL: seq_len=21 -> 7 chunks (expected 8)
+  FAIL: seq_len=25 -> 7 chunks (expected 8)
+  FAIL: seq_len=26 -> 7 chunks (expected 8)
+  FAIL: seq_len=27 -> 7 chunks (expected 8)
+  FAIL: seq_len=28 -> 7 chunks (expected 8)
+  FAIL: seq_len=33 -> 7 chunks (expected 8)
+  FAIL: seq_len=34 -> 7 chunks (expected 8)
+  FAIL: seq_len=35 -> 7 chunks (expected 8)
+  FAIL: seq_len=41 -> 7 chunks (expected 8)
+  FAIL: seq_len=42 -> 7 chunks (expected 8)
+  FAIL: seq_len=49 -> 7 chunks (expected 8)
+
+======================================================================
+FAILED: 77 test case(s) failed
+Failed cases: [7, 14, 21, 28, 35, 42, 49, 1, 2, 3, 4, 5, 6, 7, 7, 14, 21, 28, 35, 42, 49, 'ce_exception_14', 'ce_exception_21', 'ce_exception_28', 'ce_exception_35', 'ce_exception_42', 'ce_exception_49', 'ce_exception_50', 'fkl_exception_14', 'fkl_exception_21', 'fkl_exception_28', 'fkl_exception_35', 'fkl_exception_42', 'fkl_exception_49', 'fkl_exception_50', 'rkl_exception_14', 'rkl_exception_21', 'rkl_exception_28', 'rkl_exception_35', 'rkl_exception_42', 'rkl_exception_49', 'rkl_exception_50', 'sym_kl_exception_14', 'sym_kl_exception_21', 'sym_kl_exception_28', 'sym_kl_exception_35', 'sym_kl_exception_42', 'sym_kl_exception_49', 'sym_kl_exception_50', 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20, 21, 25, 26, 27, 28, 33, 34, 35, 41, 42, 49]
+
+This is expected BEFORE the fix is applied.
+The fix: replace .chunk() with .tensor_split() in:
+  - torchtune/modules/transformer.py (chunked_output)
+  - torchtune/modules/loss/ce_chunked_output_loss.py (forward)
+  - torchtune/modules/loss/kd_losses.py (all chunked loss classes)

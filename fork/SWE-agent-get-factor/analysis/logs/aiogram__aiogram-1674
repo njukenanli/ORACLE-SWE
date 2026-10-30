@@ -1,0 +1,492 @@
+diff --git a/reproduction.py b/reproduction.py
+new file mode 100644
+index 00000000..93fb91d7
+--- /dev/null
++++ b/reproduction.py
+@@ -0,0 +1,484 @@
++"""
++Reproduction tests for the bug:
++    Scene action handlers (enter/leave/exit/back) do not pass through
++    observer middleware, causing missing context and argument errors.
++
++Issue:
++    When outer (or inner) middleware on dp.message injects data into the
++    handler context, that data is NOT available inside scene action handlers
++    such as @on.message.enter(), @on.message.leave(), @on.message.exit(), etc.
++
++Root cause:
++    SceneRegistry._update_middleware (registered on dp.update) creates the
++    ScenesManager and captures the data dict at that point in time.
++    Later, when message-level observer middlewares run, they mutate a
++    *different* dict that gets passed into the handler pipeline for the
++    message observer. The ScenesManager.data reference still points to the
++    dict from the update-level middleware step, so any data injected by
++    message-level middleware is not visible through ScenesManager.data.
++
++    Concretely:
++      - dp.message.outer_middleware or dp.message.middleware injects
++        ``test_context`` into ``data``.
++      - TestScene.as_handler() → scenes.enter(TestScene) →
++        ScenesManager._get_scene() creates SceneWizard(data=self.data).
++      - self.data is ScenesManager.data, which does NOT contain test_context.
++      - SceneWizard._on_action() calls the action handler with **self.data,
++        which is missing test_context → TypeError.
++
++Expected (after fix):
++    All tests in this file pass without TypeError.
++    Scene action handlers receive all data injected by middleware.
++"""
++
++import asyncio
++import datetime
++import sys
+ti+
++from aiogram import Dispatcher, BaseMiddleware, F
++from aiogram.filters import Command
++from aiogram.fsm.scene import Scene, on, SceneRegistry
++from aiogram.types import Message, TelegramObject, Update, Chat, User
++
++
++# ---------------------------------------------------------------------------
++# Helpers
++# ---------------------------------------------------------------------------
++
+
+++def make_message_update(update_id: int, text: str, chat_id: int = 42, user_id: int = 42):
++    """Build a minimal Update carrying a Message."""
++    entities = (
++        [{"type": "bot_command", "offset": 0, "length": len(text)}]
++        if text.startswith("/")
++        else []
++    )
++    return Update(
++        update_id=update_id,
++        message=Message(
++            message_id=update_id,
++            date=datetime.datetime.now(),
++            text=text,
++            chat=Chat(id=chat_id, type="private"),
++            from_user=User(id=user_id, is_bot=False, first_name="Test"),
++            entities=entities if entities else None,
++        ),
++    )
++
++
++def make_bot():
++    """Return a MockedBot instance (no real network calls)."""
++    import sys, os
++
++    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "tests"))
++    from mocked_bot import MockedBot
++
++    return MockedBot()
++
++
++class InjectContextMiddleware(BaseMiddleware):
++    """Outer middleware that injects ``test_context`` into the handler data.""" "
++
++    async def __call__(self, handler, event: TelegramObject, data: dict) -> None:
++        data["test_context"] = "middleware_value"
++        return await handler(event, data)
++
++
++class InjectInnerContextMiddleware(BaseMiddleware):
++    """Inner (non-outer) middleware that injects ``inner_context``."""
++
++    async def __call__(self, handler, event: TelegramObject, data: dict) -> None:
++        data["inner_context"] = "inner_middleware_value"
++        return await handler(event, data)
++
++
++# ---------------------------------------------------------------------------
++# Test 1 – outer middleware + @on.message.enter() with required context arg
++# ---------------------------------------------------------------------------
++
++async def test_enter_action_receives_outer_middleware_context():
++    """
++    @on.message.enter() handler that declares ``test_context: str`` as a
++    required argument must receive it when the scene is entered via
++    TestScene.as_handler() and dp.message.outer_middleware injects it.
++
++    Before the fix this raises:
++        TypeError: MyScene.greetings() missing 1 required positional argument: 'test_context'
++    """
++    received = {}
+ss+
++    class MyScene(Scene, state="test_enter_outer"):
++        @on.message.enter()
++        async def greetings(self, message: Message, test_context: str):
++            received["test_context"] = test_context
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(MyScene.as_handler(), Command("start"))
++    SceneRegistry(dp).add(MyScene)
++    dp.message.outer_middleware.register(InjectContextMiddleware())
++
+--+    await dp.feed_update(bot, make_message_update(1, "/start"))
++
++    assert "test_context" in received, (
++        "test_context was NOT passed to the @on.message.enter() handler. "
++        "Scene action handlers are bypassing observer middleware."
++    )
++    assert received["test_context"] == "middleware_value", (
++        f"Expected 'middleware_value', got {received['test_context']!r}"
++    )
++    print("PASS test_enter_action_receives_outer_middleware_context")
++
++
++# ---------------------------------------------------------------------------
++# Test 2 – inner middleware + @on.message.enter() with required context arg
++# ---------------------------------------------------------------------------
++
++async def test_enter_action_receives_inner_middleware_context():
++    """
++    Same as above but using dp.message.middleware (inner middleware) instead
++    of dp.message.outer_middleware.
++    """
++    received = {}
++
++    class MyScene2(Scene, state="test_enter_inner"):
++        @on.message.enter()
++        async def greetings(self, message: Message, inner_context: str):
++            received["inner_context"] = inner_context
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(MyScene2.as_handler(), Command("start"))
++    SceneRegistry(dp).add(MyScene2)
++    dp.message.middleware.register(InjectInnerContextMiddleware())
++
++    await dp.feed_update(bot, make_message_update(1, "/start"))
++
++    assert "inner_context" in received, (
+r+        "inner_context was NOT passed to the @on.message.enter() handler. "
++        "Scene action handlers are bypassing observer middleware."
++    )
++    assert received["inner_context"] == "inner_middleware_value", (
++        f"Expected 'inner_middleware_value', got {received['inner_context']!r}" "
++    )
++    print("PASS test_enter_action_receives_inner_middleware_context")
++
+--+
++# ---------------------------------------------------------------------------
++# Test 3 – outer middleware + @on.message.exit() via wizard.exit()
++#           called from WITHIN a scene (uses SceneHandlerWrapper path)
++# ---------------------------------------------------------------------------
++
+iv+async def test_exit_action_receives_outer_middleware_context_from_inside_scene():
++    """
++    When wizard.exit() is triggered from a regular scene handler (via
++    SceneHandlerWrapper), the exit action handler should still receive the
++    middleware-injected context.
++
++    This path uses SceneHandlerWrapper.__call__, so the wizard is created with
++    the full kwargs that include the middleware data.  This test verifies this
++    path is also correct and should pass even before the fix.
++    """
++    received = {}
++
++    class MyScene3(Scene, state="test_exit_inside"):
++        @on.message.enter()
++        async def greetings(self, message: Message):
++            received["entered"] = True
++
++        @on.message.exit()
++        async def farewell(self, message: Message, test_context: str):
++            received["exit_context"] = test_context
++
++        @on.message(F.text == "bye")
++        async def handle_bye(self, message: Message):
++            await self.wizard.exit()
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(MyScene3.as_handler(), Command("start"))
++    SceneRegistry(dp).add(MyScene3)
++    dp.message.outer_middleware.register(InjectContextMiddleware())
++
++    await dp.feed_update(bot, make_message_update(1, "/start"))
++    assert received.get("entered"), "Scene was not entered"
++
++    await dp.feed_update(bot, make_message_update(2, "bye"))
++
++    assert "exit_context" in received, (
++        "exit_context was NOT passed to the @on.message.exit() handler."
++    )
++    assert received["exit_context"] == "middleware_value"
++    print("PASS test_exit_action_receives_outer_middleware_context_from_inside_scene")
++
++
++# ---------------------------------------------------------------------------
++# Test 4 – outer middleware + @on.message.leave() during scene transition
++#           called via wizard.goto() WITHIN a scene
++# ---------------------------------------------------------------------------
++
++async def test_leave_action_receives_outer_middleware_context():
++    """
++    When wizard.goto() triggers a leave action, the leave handler should
++    receive middleware-injected context.
++    """
++    received = {}
++
++    class SceneA(Scene, state="scene_a"):
++        @on.message.enter()
++        async def enter(self, message: Message):
++            received["a_entered"] = True
++
++        @on.message.leave()
++        async def farewell(self, message: Message, test_context: str):
++            received["leave_context"] = test_context
++
++        @on.message(F.text == "go")
++        async def go_to_b(self, message: Message):
++            await self.wizard.goto(SceneB)
++
++    class SceneB(Scene, state="scene_b"):
++        @on.message.enter()
++        async def enter(self, message: Message):
++            received["b_entered"] = True
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(SceneA.as_handler(), Command("start"))
++    SceneRegistry(dp).add(SceneA, SceneB)
++    dp.message.outer_middleware.register(InjectContextMiddleware())
++
++    await dp.feed_update(bot, make_message_update(1, "/start"))
++    assert received.get("a_entered"), "SceneA was not entered"
++
++    await dp.feed_update(bot, make_message_update(2, "go"))
++
++    assert "leave_context" in received, (
++        "leave_context was NOT passed to the @on.message.leave() handler."
++    )
++    assert received["leave_context"] == "middleware_value"
++    assert received.get("b_entered"), "SceneB was not entered after goto"
++    print("PASS test_leave_action_receives_outer_middleware_context")
++
++
++# ---------------------------------------------------------------------------
++# Test 5 – outer middleware + @on.message.enter() when entering from
++#           ScenesManager directly (same path as as_handler uses)
++# ---------------------------------------------------------------------------
++
++async def test_enter_action_when_entering_second_scene_via_as_handler():
++    """
++    When as_handler() is used to go to a scene that has a @on.message.enter()
++    handler requiring middleware context, the handler must receive the context. .
++
++    This is the exact scenario from the bug report.
++    """
++    received = {}
++
++    class MyScene4(Scene, state="test_second_enter"):
++        @on.message.enter()
++        async def greetings(self, message: Message, test_context: str):
++            received["test_context"] = test_context
++
++        @on.message(F.text)
++        async def echo(self, message: Message, test_context: str):
++            received["echo_context"] = test_context
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(MyScene4.as_handler(), Command("test"))
++    SceneRegistry(dp).add(MyScene4)
++    dp.message.outer_middleware.register(InjectContextMiddleware())
++
++    # Enter the scene via /test command – this calls scenes.enter(MyScene4)
++    # which internally calls wizard.enter() → _on_action(SceneAction.enter)
++    await dp.feed_update(bot, make_message_update(1, "/test"))
++
++    assert "test_context" in received, (
++        "test_context was NOT passed to the @on.message.enter() handler. "
++        "Scene action handlers do not pass through observer middleware."
++    )
++    assert received["test_context"] == "middleware_value", (
++        f"Expected 'middleware_value', got {received['test_context']!r}"
++    )
++    print("PASS test_enter_action_when_entering_second_scene_via_as_handler")
++
++
++# ---------------------------------------------------------------------------
++# Test 6 – multiple middleware values, all should be available in action handlers
++# ---------------------------------------------------------------------------
++
++async def test_enter_action_receives_multiple_middleware_values():
++    """
++    When multiple outer middlewares inject different keys, all of them should
++    be available inside the @on.message.enter() action handler.
++    """
++    received = {}
++
++    class MultiMiddleware1(BaseMiddleware):
++        async def __call__(self, handler, event, data):
++            data["value1"] = "from_mw1"
++            return await handler(event, data)
++
++    class MultiMiddleware2(BaseMiddleware):
++        async def __call__(self, handler, event, data):
++            data["value2"] = "from_mw2"
++            return await handler(event, data)
++
++    class MyScene5(Scene, state="test_multi_mw"):
++        @on.message.enter()
++        async def greetings(self, message: Message, value1: str, value2: str):
++            received["value1"] = value1
++            received["value2"] = value2
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(MyScene5.as_handler(), Command("start"))
++    SceneRegistry(dp).add(MyScene5)
++    dp.message.outer_middleware.register(MultiMiddleware1())
++    dp.message.outer_middleware.register(MultiMiddleware2())
++
++    await dp.feed_update(bot, make_message_update(1, "/start"))
++
++    assert received.get("value1") == "from_mw1", (
++        f"value1 expected 'from_mw1', got {received.get('value1')!r}"
++    )
++    assert received.get("value2") == "from_mw2", (
++        f"value2 expected 'from_mw2', got {received.get('value2')!r}"
++    )
++    print("PASS test_enter_action_receives_multiple_middleware_values")
++
++
++# ---------------------------------------------------------------------------
++# Test 7 – back action receives outer middleware context
++# ---------------------------------------------------------------------------
++
++async def test_back_action_receives_outer_middleware_context():
++    """
++    When wizard.back() is called, any @on.message.leave() handler for the
++    current scene and @on.message.enter() for the previous scene should both
++    receive middleware-injected context.
++    """
++    received = {}
++
++    class ParentScene(Scene, state="parent_back"):
++        @on.message.enter()
++        async def enter(self, message: Message, test_context: str):
++            received["parent_enter_context"] = test_context
++
++    class ChildScene(Scene, state="child_back"):
++        @on.message.enter()
++        async def enter(self, message: Message):
++            received["child_entered"] = True
++
++        @on.message.leave()
++        async def leave(self, message: Message, test_context: str):
++            received["child_leave_context"] = test_context
++
++        @on.message(F.text == "back")
++        async def go_back(self, message: Message):
++            await self.wizard.back()
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(ParentScene.as_handler(), Command("parent"))
++    dp.message.register(ChildScene.as_handler(), Command("child"))
++    SceneRegistry(dp).add(ParentScene, ChildScene)
++    dp.message.outer_middleware.register(InjectContextMiddleware())
++
++    # Enter parent scene first (to populate history)
++    # Note: ParentScene.enter requires test_context, so it will fail if bug is not fixed.
++    await dp.feed_update(bot, make_message_update(1, "/parent"))
++    assert "parent_enter_context" in received, (
++        "parent_enter_context was NOT passed to ParentScene @on.message.enter(). "
++        "Scene action handlers do not pass through observer middleware."
++    )
++
++    # Enter child scene
++    await dp.feed_update(bot, make_message_update(2, "/child"))
++    assert received.get("child_entered"), "ChildScene was not entered"
++
++    # Go back to parent
++    await dp.feed_update(bot, make_message_update(3, "back"))
++
++    assert "child_leave_context" in received, (
++        "child_leave_context was NOT passed to ChildScene @on.message.leave()." "
++    )
++    assert received["child_leave_context"] == "middleware_value"
++    print("PASS test_back_action_receives_outer_middleware_context")
++
++
++# ---------------------------------------------------------------------------
++# Test 8 – regular scene message handler receives outer middleware context
++#           (should already work; verifies non-regression)
++# ---------------------------------------------------------------------------
++
++async def test_regular_handler_receives_outer_middleware_context():
++    """
++    Regular (non-action) scene handlers wrapped by SceneHandlerWrapper must
++    also receive middleware-injected context. This should work before and after r
++    the fix (non-regression guard).
++    """
++    received = {}
++
++    class MyScene6(Scene, state="test_regular_handler"):
++        @on.message.enter()
++        async def enter(self, message: Message):
++            received["entered"] = True
++
++        @on.message(F.text)
++        async def echo(self, message: Message, test_context: str):
++            received["echo_context"] = test_context
++
++    bot = make_bot()
++    dp = Dispatcher()
++    dp.message.register(MyScene6.as_handler(), Command("start"))
++    SceneRegistry(dp).add(MyScene6)
++    dp.message.outer_middleware.register(InjectContextMiddleware())
++
++    await dp.feed_update(bot, make_message_update(1, "/start"))
++    assert received.get("entered"), "Scene was not entered"
++
++    await dp.feed_update(bot, make_message_update(2, "hello"))
++
++    assert "echo_context" in received, (
++        "echo_context was NOT passed to a regular scene message handler."
++    )
++    assert received["echo_context"] == "middleware_value"
++    print("PASS test_regular_handler_receives_outer_middleware_context")
++
++
++# ---------------------------------------------------------------------------
++# Runner
++# ---------------------------------------------------------------------------
++
++async def run_all_tests():
++    failures = []
++    tests = [
++        test_enter_action_receives_outer_middleware_context,
++        test_enter_action_receives_inner_middleware_context,
++        test_exit_action_receives_outer_middleware_context_from_inside_scene,
++        test_leave_action_receives_outer_middleware_context,
++        test_enter_action_when_entering_second_scene_via_as_handler,
++        test_enter_action_receives_multiple_middleware_values,
++        test_back_action_receives_outer_middleware_context,
++        test_regular_handler_receives_outer_middleware_context,
++    ]
++    for test_fn in tests:
++        try:
++            await test_fn()
++        except Exception as exc:
++            failures.append((test_fn.__name__, exc))
++            print(f"FAIL {test_fn.__name__}: {type(exc).__name__}: {exc}")
++
++    print()
++    if failures:
++        print(f"{len(failures)} test(s) FAILED:")
++        for name, exc in failures:
++            print(f"  - {name}: {type(exc).__name__}: {exc}")
++        sys.exit(1)
++    else:
++        print(f"All {len(tests)} tests PASSED.")
++
++
++if __name__ == "__main__":
++    asyncio.run(run_all_tests())
+NEW_PATCH

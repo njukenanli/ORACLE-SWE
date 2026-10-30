@@ -1,0 +1,87 @@
+python reproduction.py
+[FAIL] index with TypeVar (single): can only concatenate str (not "TypeVar") to str
+[FAIL] index with TypeVar and builtin (multiple): can only concatenate str (not "tuple") to str
+[FAIL] index with builtin type: can only concatenate str (not "type") to str
+[FAIL] index with typing alias (Dict[str, int]): can only concatenate str (not "_GenericAlias") to str
+[FAIL] index with typing Union/Tuple aliases: can only concatenate str (not "_UnionGenericAlias") to str
+[OK] index with string and chained access
+[FAIL] class definition with generic base: can only concatenate str (not "TypeVar") to str
+
+Reproduction summary: one or more tests failed. This indicates the bug is present.
+--------------------------------------------------------------------------------
+1) index with TypeVar (single): can only concatenate str (not "TypeVar") to str
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 28, in run_case
+    func()
+  File "/testbed/reproduction.py", line 41, in case_typevar_single
+    obj = m.Foo[T]  # This triggers __getitem__ with name=T (a TypeVar)
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 56, in __getitem__
+    return _make_subclass(key, self.__display_name__, self.__class__)()
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 73, in _make_subclass
+    attrs = {'__module__': module, '__display_name__': module + '.' + name}
+TypeError: can only concatenate str (not "TypeVar") to str
+
+--------------------------------------------------------------------------------
+2) index with TypeVar and builtin (multiple): can only concatenate str (not "tuple") to str
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 28, in run_case
+    func()
+  File "/testbed/reproduction.py", line 46, in case_typevar_multiple
+    obj = m.Bar[T, int]
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 56, in __getitem__
+    return _make_subclass(key, self.__display_name__, self.__class__)()
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 73, in _make_subclass
+    attrs = {'__module__': module, '__display_name__': module + '.' + name}
+TypeError: can only concatenate str (not "tuple") to str
+
+--------------------------------------------------------------------------------
+3) index with builtin type: can only concatenate str (not "type") to str
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 28, in run_case
+    func()
+  File "/testbed/reproduction.py", line 51, in case_builtin_type
+    obj = m.Num[int]
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 56, in __getitem__
+    return _make_subclass(key, self.__display_name__, self.__class__)()
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 73, in _make_subclass
+    attrs = {'__module__': module, '__display_name__': module + '.' + name}
+TypeError: can only concatenate str (not "type") to str
+
+--------------------------------------------------------------------------------
+4) index with typing alias (Dict[str, int]): can only concatenate str (not "_GenericAlias") to str
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 28, in run_case
+    func()
+  File "/testbed/reproduction.py", line 56, in case_typing_alias
+    obj = m.DictAlias[Dict[str, int]]
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 56, in __getitem__
+    return _make_subclass(key, self.__display_name__, self.__class__)()
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 73, in _make_subclass
+    attrs = {'__module__': module, '__display_name__': module + '.' + name}
+TypeError: can only concatenate str (not "_GenericAlias") to str
+
+--------------------------------------------------------------------------------
+5) index with typing Union/Tuple aliases: can only concatenate str (not "_UnionGenericAlias") to str
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 28, in run_case
+    func()
+  File "/testbed/reproduction.py", line 61, in case_union_tuple_aliases
+    obj1 = m.Uni[Union[int, str]]
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 56, in __getitem__
+    return _make_subclass(key, self.__display_name__, self.__class__)()
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 73, in _make_subclass
+    attrs = {'__module__': module, '__display_name__': module + '.' + name}
+TypeError: can only concatenate str (not "_UnionGenericAlias") to str
+
+--------------------------------------------------------------------------------
+6) class definition with generic base: can only concatenate str (not "TypeVar") to str
+Traceback (most recent call last):
+  File "/testbed/reproduction.py", line 28, in run_case
+    func()
+  File "/testbed/reproduction.py", line 76, in case_class_definition_with_generic_base
+    BaseGeneric = m.GenericBase[T]
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 56, in __getitem__
+    return _make_subclass(key, self.__display_name__, self.__class__)()
+  File "/testbed/sphinx/ext/autodoc/mock.py", line 73, in _make_subclass
+    attrs = {'__module__': module, '__display_name__': module + '.' + name}
+TypeError: can only concatenate str (not "TypeVar") to str

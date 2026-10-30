@@ -1,0 +1,140 @@
+python reproduction.py
+Testing bug: z3 and fmt .so's are not working correctly in bazel
+======================================================================
+
+Running test_z3_symlink_chain_location...
+WARN: Lib z3 deduced as 'shared-library, but 'package_type=unknown'
+  z3 symlink chain test:
+    Expected location: /tmp/tmpdh1frq98conans/path with spaces/lib/libz3.so
+    Actual location:   /tmp/tmpdh1frq98conans/path with spaces/lib/libz3.so.4.12.4.0
+  FAILED: 
+BUG: location should be the linker symlink '/tmp/tmpdh1frq98conans/path with spaces/lib/libz3.so' not the resolved real file '/tmp/tmpdh1frq98conans/path with spaces/lib/libz3.so.4.12.4.0'.
+When Bazel uses the real file (libz3.so.4.12.4.0) as shared_library, the binary will have NEEDED=libz3.so.4.12 but at runtime Bazel only provides libz3.so.4.12.4.0. Using the linker symlink (libz3.so) in BUILD.bazel fixes this.
+
+Running test_fmt_symlink_chain_location...
+WARN: Lib fmt deduced as 'shared-library, but 'package_type=unknown'
+  fmt symlink chain test:
+    Expected location: /tmp/tmppqn6sbq5conans/path with spaces/lib/libfmt.so
+    Actual location:   /tmp/tmppqn6sbq5conans/path with spaces/lib/libfmt.so.8.0.1
+  FAILED: 
+BUG: location should be the linker symlink '/tmp/tmppqn6sbq5conans/path with spaces/lib/libfmt.so' not the resolved real file '/tmp/tmppqn6sbq5conans/path with spaces/lib/libfmt.so.8.0.1'.
+When Bazel uses the real file (libfmt.so.8.0.1) as shared_library, the binary will have NEEDED=libfmt.so.8 but at runtime Bazel only provides libfmt.so.8.0.1.
+
+Running test_bazel_build_file_with_z3_symlink_chain...
+  Generated BUILD.bazel for z3:
+    # Components precompiled libs
+    # Root package precompiled libs
+    cc_import(
+        name = "z3_precompiled",
+        shared_library = "lib/libz3.so.4.12.4.0",
+    )
+    
+    # Components libraries declaration
+    # Package library declaration
+    cc_library(
+        name = "z3",
+        hdrs = glob([
+            "include/**",
+        ]),
+        includes = [
+            "include",
+        ],
+        visibility = ["//visibility:public"],
+        deps = [
+            # do not sort
+            ":z3_precompiled",
+        ],
+    )
+    
+    # Filegroup library declaration
+    filegroup(
+        name = "z3_binaries",
+        srcs = glob([
+            "bin/**",
+        ],
+        allow_empty = True
+        ),
+        visibility = ["//visibility:public"],
+    )
+    
+  FAILED: 
+BUG CONFIRMED: BUILD.bazel references the real versioned file 'shared_library = "lib/libz3.so.4.12.4.0"'.
+This causes runtime failure because the binary will have NEEDED=libz3.so.4.12
+but Bazel only provides libz3.so.4.12.4.0 in the sandbox.
+The BUILD.bazel should use 'shared_library = "lib/libz3.so"' instead.
+
+Running test_bazel_build_file_with_fmt_symlink_chain...
+  Generated BUILD.bazel for fmt:
+    # Components precompiled libs
+    # Root package precompiled libs
+    cc_import(
+        name = "fmt_precompiled",
+        shared_library = "lib/libfmt.so.8.0.1",
+    )
+    
+    # Components libraries declaration
+    # Package library declaration
+    cc_library(
+        name = "fmt",
+        hdrs = glob([
+            "include/**",
+        ]),
+        includes = [
+            "include",
+        ],
+        visibility = ["//visibility:public"],
+        deps = [
+            # do not sort
+            ":fmt_precompiled",
+        ],
+    )
+    
+    # Filegroup library declaration
+    filegroup(
+        name = "fmt_binaries",
+        srcs = glob([
+            "bin/**",
+        ],
+        allow_empty = True
+        ),
+        visibility = ["//visibility:public"],
+    )
+    
+  FAILED: 
+BUG CONFIRMED: BUILD.bazel references the real versioned file 'shared_library = "lib/libfmt.so.8.0.1"'.
+This causes runtime failure because the binary will have NEEDED=libfmt.so.8
+but Bazel only provides libfmt.so.8.0.1 in the sandbox.
+The BUILD.bazel should use 'shared_library = "lib/libfmt.so"' instead.
+
+Running test_symlink_chain_real_file_in_different_dir...
+WARN: Lib png deduced as 'shared-library, but 'package_type=unknown'
+  png symlink chain (real file in other dir) test:
+    Expected location: /tmp/tmp1f8p2q7sconans/path with spaces/libdir/libpng.so
+    Actual location:   /tmp/tmp1f8p2q7sconans/path with spaces/other/libpng16.so.16.44.0
+  FAILED: 
+BUG: location should be the linker symlink '/tmp/tmp1f8p2q7sconans/path with spaces/libdir/libpng.so' (exact match for libs=['png']) but got '/tmp/tmp1f8p2q7sconans/path with spaces/other/libpng16.so.16.44.0'.
+The fix should not resolve symlinks and should return the exact matching symlink that corresponds to the library name.
+
+Running test_no_symlinks_still_works...
+WARN: Lib mylib deduced as 'shared-library, but 'package_type=unknown'
+  No symlinks test:
+    Expected: /tmp/tmp4sm242w_conans/path with spaces/lib/libmylib.so
+    Actual:   /tmp/tmp4sm242w_conans/path with spaces/lib/libmylib.so
+  PASSED
+
+Running test_single_version_symlink...
+WARN: Lib foo deduced as 'shared-library, but 'package_type=unknown'
+  Single version symlink test:
+    Expected: /tmp/tmp6kpcz6zlconans/path with spaces/lib/libfoo.so
+    Actual:   /tmp/tmp6kpcz6zlconans/path with spaces/lib/libfoo.so.1.0.0
+  FAILED: 
+BUG: location should be '/tmp/tmp6kpcz6zlconans/path with spaces/lib/libfoo.so' (linker symlink) but got '/tmp/tmp6kpcz6zlconans/path with spaces/lib/libfoo.so.1.0.0' (resolved real file).
+
+======================================================================
+FAILURES (6):
+  - test_z3_symlink_chain_location
+  - test_fmt_symlink_chain_location
+  - test_bazel_build_file_with_z3_symlink_chain
+  - test_bazel_build_file_with_fmt_symlink_chain
+  - test_symlink_chain_real_file_in_different_dir
+  - test_single_version_symlink

