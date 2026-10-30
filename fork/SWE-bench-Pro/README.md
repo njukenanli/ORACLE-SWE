@@ -1,3 +1,8 @@
+```bash
+pip install datasets pandas
+```
+
+
 ```python
 from datasets import load_dataset
 swebench = load_dataset('ScaleAI/SWE-bench_Pro', split='test')

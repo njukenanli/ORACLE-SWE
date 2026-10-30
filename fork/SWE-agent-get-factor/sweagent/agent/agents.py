@@ -619,9 +619,14 @@ Once you have completed /testbed/answer.json, submit.
             message = f"""
 You need to find the correct command to run original regression tests in the repository, and parse the test output to record passed testcases and failed testcases.
 For many repos the regression command is not trivial -- "pytest . / gotest . " does not resolve everything.
-You need to read the repo documents to figure out the correct way to run regression tests -- the test command, the evironment variables to set...
-Usually you don't need to run all tests in the repository -- it's too time-consuming. It is recommended to only test codes related to the issue description in your test command.
+You need to read the repo documents to figure out the correct way to run regression tests, including the test command and the evironment variables to set...
+
+Try to only select test files that test codes related to the issue description in your test command. Your test command should select whole test files instead of single test function -- selecting single test functions is not enough.
+If you find it is impossible to select specific test files to run, then fall back to write a command to run all tests in the repo.
+
+You must run the regression test command yourself to verify its correctness.
 After regression test, direct test output to log file and parse the test output to record passed and failed testcases. If the test framework allows JSON / XML structured output, use it to help log parsing.
+
 You answer should be written into /testbed/answer.json
 We will check the correctness of your answer by reading /testbed/answer.json
 In /testbed/answer.json, your answer format should be like:
